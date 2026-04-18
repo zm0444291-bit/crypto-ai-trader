@@ -1,19 +1,18 @@
-# Claude Code Task: Milestone 4.1 Risk Profile Foundation
+# Claude Code Task: Milestone 4.2 Pre-Trade Risk Checks
 
 You are the implementation worker for `crypto-ai-trader`.
 
-Read these files first:
+Read:
 
 - `docs/claude-collaboration.md`
-- `docs/superpowers/specs/2026-04-19-crypto-ai-trader-design.md`
-- Existing code under `trading/`
-- Existing tests under `tests/`
+- `trading/risk/profiles.py`
+- `trading/risk/state.py`
+- `trading/strategies/base.py`
+- Existing tests under `tests/unit/`
 
 ## Goal
 
-Implement the first safe slice of the Risk Engine: risk profile schemas, dynamic equity-based risk limit calculation, daily-loss risk state classification, and tests.
-
-This task is **pre-execution only**. It must not place orders, simulate orders, call Binance private APIs, or change any live trading lock.
+Implement deterministic pre-trade risk checks for a `TradeCandidate`. This task must only approve or reject a candidate. It must not size positions, create orders, simulate fills, call Binance, or touch live trading.
 
 ## Safety Rules
 
@@ -24,154 +23,114 @@ Do not implement:
 - Live trading
 - Binance private endpoints
 - API key handling
-- Position sizing
-- Strategy changes
-- AI scoring changes
 - Runtime scheduler
-
-Do implement:
-
-- Risk profile data models
-- Risk state enum/literals
-- Daily PnL percentage calculation
-- Equity-tier profile selection
-- Daily loss classification
-- Unit tests
+- Exchange account reads
 
 ## Files To Create
 
-Create:
-
-- `trading/risk/__init__.py`
-- `trading/risk/profiles.py`
-- `trading/risk/state.py`
-- `tests/unit/test_risk_profiles.py`
-- `tests/unit/test_risk_state.py`
+- `trading/risk/pre_trade.py`
+- `tests/unit/test_pre_trade_risk.py`
 - `docs/claude-tasks/last-result.md`
 
-Do not modify unrelated files unless needed for lint or tests.
+## Required Models
 
-## Required Behavior
-
-### `trading/risk/profiles.py`
-
-Define:
+Create in `trading/risk/pre_trade.py`:
 
 ```python
 from decimal import Decimal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-class RiskProfile(BaseModel):
-    name: str
-    equity_min_usdt: Decimal = Field(ge=0)
-    equity_max_usdt: Decimal | None = Field(default=None, ge=0)
-    daily_loss_caution_pct: Decimal = Field(gt=0)
-    daily_loss_no_new_positions_pct: Decimal = Field(gt=0)
-    daily_loss_global_pause_pct: Decimal = Field(gt=0)
-    max_trade_risk_pct: Decimal = Field(gt=0)
-    max_trade_risk_hard_cap_pct: Decimal = Field(gt=0)
-    max_symbol_position_pct: Decimal = Field(gt=0)
-    max_total_position_pct: Decimal = Field(gt=0)
-```
+class PortfolioRiskSnapshot(BaseModel):
+    account_equity: Decimal
+    day_start_equity: Decimal
+    total_position_pct: Decimal
+    symbol_position_pct: Decimal
+    open_positions: int
+    daily_order_count: int
+    symbol_daily_trade_count: int
+    consecutive_losses: int
+    data_is_fresh: bool
+    kill_switch_enabled: bool
 
-Define:
-
-```python
-def default_risk_profiles() -> list[RiskProfile]: ...
-def select_risk_profile(equity_usdt: Decimal, profiles: list[RiskProfile] | None = None) -> RiskProfile: ...
-def daily_pnl_pct(day_start_equity: Decimal, current_equity: Decimal) -> Decimal: ...
-def pct_to_amount(equity_usdt: Decimal, pct: Decimal) -> Decimal: ...
-```
-
-Default profiles must match the design:
-
-```text
-small_balanced:
-  0-1000 USDT
-  caution 5
-  no_new_positions 7
-  global_pause 10
-  max_trade_risk 1.5
-  hard_cap 2.0
-  symbol cap 30
-  total cap 70
-
-medium_conservative:
-  1000-10000 USDT
-  caution 3
-  no_new_positions 5
-  global_pause 7
-  max_trade_risk 1.0
-  hard_cap 1.5
-  symbol cap 25
-  total cap 60
-
-large_conservative:
-  10000+ USDT
-  caution 2
-  no_new_positions 4
-  global_pause 5
-  max_trade_risk 0.5
-  hard_cap 1.0
-  symbol cap 20
-  total cap 50
-```
-
-Rules:
-
-- `select_risk_profile(Decimal("500"))` returns `small_balanced`.
-- `select_risk_profile(Decimal("2000"))` returns `medium_conservative`.
-- `select_risk_profile(Decimal("20000"))` returns `large_conservative`.
-- `daily_pnl_pct(Decimal("100"), Decimal("95")) == Decimal("-5")`.
-- `daily_pnl_pct` must raise `ValueError` when day start equity is `<= 0`.
-- `pct_to_amount(Decimal("500"), Decimal("7")) == Decimal("35")`.
-
-### `trading/risk/state.py`
-
-Define risk states:
-
-```python
-RiskState = Literal["normal", "degraded", "no_new_positions", "global_pause", "emergency_stop"]
-```
-
-Define:
-
-```python
-class DailyLossDecision(BaseModel):
+class PreTradeRiskDecision(BaseModel):
+    approved: bool
     risk_state: RiskState
-    daily_pnl_pct: Decimal
-    reason: str
-
-def classify_daily_loss(day_start_equity: Decimal, current_equity: Decimal, profile: RiskProfile) -> DailyLossDecision: ...
+    size_multiplier: Decimal
+    reject_reasons: list[str]
 ```
 
-Rules for a small profile:
+Create:
 
-- 0% to above -5% -> `normal`
-- -5% to above -7% -> `degraded`
-- -7% to above -10% -> `no_new_positions`
-- -10% or worse -> `global_pause`
+```python
+def evaluate_pre_trade_risk(
+    candidate: TradeCandidate,
+    snapshot: PortfolioRiskSnapshot,
+    profile: RiskProfile,
+    max_daily_orders: int = 15,
+    max_symbol_daily_trades: int = 4,
+    max_consecutive_losses: int = 4,
+) -> PreTradeRiskDecision: ...
+```
 
-Use positive profile thresholds and compare against losses.
+## Required Behavior
+
+Reject when:
+
+- kill switch is enabled
+- data is not fresh
+- daily loss state is `no_new_positions` or `global_pause`
+- total position pct is greater than or equal to profile max total position pct
+- symbol position pct is greater than or equal to profile max symbol position pct
+- daily order count is greater than or equal to max daily orders
+- symbol daily trade count is greater than or equal to max symbol daily trades
+- consecutive losses is greater than or equal to max consecutive losses
+
+Approve when none of the reject rules apply.
+
+Risk state:
+
+- Use `classify_daily_loss`.
+- If approved and daily loss state is `degraded`, return `risk_state="degraded"` and `size_multiplier=Decimal("0.5")`.
+- If approved and daily loss state is `normal`, return `risk_state="normal"` and `size_multiplier=Decimal("1")`.
+- If rejected by kill switch, return `risk_state="emergency_stop"`.
+- If rejected by daily loss no-new/global, return that daily loss risk state.
+- Otherwise rejected risk state can be `no_new_positions`.
+
+Reject reason strings must be stable snake_case codes, such as:
+
+- `kill_switch_enabled`
+- `stale_market_data`
+- `daily_loss_no_new_positions`
+- `daily_loss_global_pause`
+- `max_total_position_reached`
+- `max_symbol_position_reached`
+- `max_daily_orders_reached`
+- `max_symbol_daily_trades_reached`
+- `max_consecutive_losses_reached`
 
 ## Required Tests
 
-Write tests that prove:
+Write unit tests for:
 
-- Default profile names and thresholds match design.
-- Profile selection works for 500, 2000, and 20000 USDT.
-- `daily_pnl_pct` calculates loss and gain correctly.
-- `daily_pnl_pct` rejects zero day-start equity.
-- `pct_to_amount` converts threshold percentages to USDT amount.
-- `classify_daily_loss` returns `normal`, `degraded`, `no_new_positions`, and `global_pause` at the expected thresholds.
+- approves normal candidate with size multiplier 1
+- degraded daily loss approves with size multiplier 0.5
+- kill switch rejects with emergency_stop
+- stale data rejects
+- no_new_positions daily loss rejects
+- global_pause daily loss rejects
+- max total position rejects
+- max symbol position rejects
+- max daily orders rejects
+- max symbol daily trades rejects
+- max consecutive losses rejects
 
-## Verification Commands
+## Verification
 
 Run:
 
 ```bash
-.venv/bin/pytest tests/unit/test_risk_profiles.py tests/unit/test_risk_state.py -v
-.venv/bin/ruff check trading/risk tests/unit/test_risk_profiles.py tests/unit/test_risk_state.py
+.venv/bin/pytest tests/unit/test_pre_trade_risk.py -v
+.venv/bin/ruff check trading/risk tests/unit/test_pre_trade_risk.py
 .venv/bin/pytest -q
 .venv/bin/ruff check .
 git status --short
@@ -179,11 +138,11 @@ git status --short
 
 ## Commit
 
-If all verification passes, commit:
+If verification passes:
 
 ```bash
-git add trading/risk tests/unit/test_risk_profiles.py tests/unit/test_risk_state.py docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
-git commit -m "feat: add risk profile foundation"
+git add trading/risk/pre_trade.py tests/unit/test_pre_trade_risk.py docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
+git commit -m "feat: add pre-trade risk checks"
 ```
 
 ## Completion Report
@@ -193,7 +152,7 @@ Write `docs/claude-tasks/last-result.md` with:
 ```text
 # Last Claude Code Result
 
-Task: Milestone 4.1 Risk Profile Foundation
+Task: Milestone 4.2 Pre-Trade Risk Checks
 Status: completed | failed
 
 Files changed:
@@ -216,4 +175,3 @@ Notes:
 ```
 
 Then stop.
-
