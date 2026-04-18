@@ -77,6 +77,14 @@ class TestSelectRiskProfile:
         profile = select_risk_profile(Decimal("10000"))
         assert profile.name == "large_conservative"
 
+    def test_rejects_negative_equity(self):
+        with pytest.raises(ValueError, match="equity_usdt"):
+            select_risk_profile(Decimal("-1"))
+
+    def test_rejects_empty_profile_list(self):
+        with pytest.raises(ValueError, match="profiles"):
+            select_risk_profile(Decimal("100"), profiles=[])
+
 
 class TestDailyPnlPct:
     def test_calculates_positive_gain(self):
@@ -112,3 +120,11 @@ class TestPctToAmount:
     def test_converts_zero_percentage(self):
         result = pct_to_amount(Decimal("1000"), Decimal("0"))
         assert result == Decimal("0")
+
+    def test_rejects_negative_equity(self):
+        with pytest.raises(ValueError, match="equity_usdt"):
+            pct_to_amount(Decimal("-1"), Decimal("7"))
+
+    def test_rejects_negative_percentage(self):
+        with pytest.raises(ValueError, match="pct"):
+            pct_to_amount(Decimal("500"), Decimal("-1"))

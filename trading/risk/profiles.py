@@ -60,8 +60,12 @@ def default_risk_profiles() -> list[RiskProfile]:
 def select_risk_profile(
     equity_usdt: Decimal, profiles: list[RiskProfile] | None = None
 ) -> RiskProfile:
+    if equity_usdt < Decimal("0"):
+        raise ValueError("equity_usdt must be greater than or equal to zero")
     if profiles is None:
         profiles = default_risk_profiles()
+    if not profiles:
+        raise ValueError("profiles must not be empty")
     for profile in profiles:
         if equity_usdt >= profile.equity_min_usdt:
             if profile.equity_max_usdt is None or equity_usdt < profile.equity_max_usdt:
@@ -77,4 +81,8 @@ def daily_pnl_pct(day_start_equity: Decimal, current_equity: Decimal) -> Decimal
 
 
 def pct_to_amount(equity_usdt: Decimal, pct: Decimal) -> Decimal:
+    if equity_usdt < Decimal("0"):
+        raise ValueError("equity_usdt must be greater than or equal to zero")
+    if pct < Decimal("0"):
+        raise ValueError("pct must be greater than or equal to zero")
     return equity_usdt * pct / Decimal("100")
