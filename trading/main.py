@@ -4,10 +4,12 @@ from fastapi import FastAPI
 from sqlalchemy.orm import Session
 
 from trading.dashboard_api.routes_health import router as health_router
+from trading.dashboard_api.routes_market_data import router as market_data_router
 from trading.storage.repositories import EventsRepository
 
 app = FastAPI(title="Crypto AI Trader")
 app.include_router(health_router)
+app.include_router(market_data_router)
 
 
 def record_startup_event(session_factory: Callable[[], Session]) -> None:
