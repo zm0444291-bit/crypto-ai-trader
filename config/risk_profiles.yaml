@@ -1,0 +1,35 @@
+risk_profiles:
+  small_balanced:
+    equity_min_usdt: 0
+    equity_max_usdt: 1000
+    daily_loss_caution_pct: 5
+    daily_loss_no_new_positions_pct: 7
+    daily_loss_global_pause_pct: 10
+    max_trade_risk_pct: 1.5
+    max_trade_risk_hard_cap_pct: 2.0
+    max_symbol_position_pct: 30
+    max_total_position_pct: 70
+  medium_conservative:
+    equity_min_usdt: 1000
+    equity_max_usdt: 10000
+    daily_loss_caution_pct: 3
+    daily_loss_no_new_positions_pct: 5
+    daily_loss_global_pause_pct: 7
+    max_trade_risk_pct: 1.0
+    max_trade_risk_hard_cap_pct: 1.5
+    max_symbol_position_pct: 25
+    max_total_position_pct: 60
+  large_conservative:
+    equity_min_usdt: 10000
+    equity_max_usdt: null
+    daily_loss_caution_pct: 2
+    daily_loss_no_new_positions_pct: 4
+    daily_loss_global_pause_pct: 5
+    max_trade_risk_pct: 0.5
+    max_trade_risk_hard_cap_pct: 1.0
+    max_symbol_position_pct: 20
+    max_total_position_pct: 50
+
+policy:
+  auto_tighten_risk: true
+  auto_loosen_risk: false

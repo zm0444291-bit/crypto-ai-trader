@@ -1,0 +1,26 @@
+app:
+  name: crypto-ai-trader
+  default_trade_mode: paper_auto
+  live_trading_enabled: false
+  live_capital_cap_usdt: 500
+  require_manual_unlock: true
+
+runtime:
+  loop_interval_seconds: 60
+  timezone: Australia/Sydney
+
+storage:
+  database_url: sqlite:///./data/crypto_ai_trader.sqlite3
+
+symbols:
+  enabled:
+    - BTCUSDT
+    - ETHUSDT
+    - SOLUSDT
+
+timeframes:
+  signal:
+    - 15m
+    - 1h
+  context:
+    - 4h

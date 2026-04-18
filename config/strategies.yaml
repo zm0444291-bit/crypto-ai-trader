@@ -1,0 +1,28 @@
+strategies:
+  active:
+    multi_timeframe_momentum:
+      enabled: true
+      mode: paper_auto
+      symbols:
+        - BTCUSDT
+        - ETHUSDT
+        - SOLUSDT
+  templates:
+    futures_momentum:
+      enabled: false
+      reason: Requires derivatives risk model and funding data.
+    orderbook_imbalance:
+      enabled: false
+      reason: Requires websocket order book and latency controls.
+    cross_exchange_arbitrage:
+      enabled: false
+      reason: Requires multiple exchange accounts and transfer risk checks.
+    news_sentiment:
+      enabled: false
+      reason: Requires reliable news and social data source validation.
+    onchain_flow:
+      enabled: false
+      reason: Requires an on-chain data provider.
+    ml_signal:
+      enabled: false
+      reason: Requires validated training pipeline and model monitoring.
