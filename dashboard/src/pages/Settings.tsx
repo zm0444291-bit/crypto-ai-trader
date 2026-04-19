@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   getHealth,
   getRuntimeStatus,
@@ -59,14 +59,14 @@ export default function Settings() {
   const [lockLoading, setLockLoading] = useState(false);
   const [lockFeedback, setLockFeedback] = useState<{ success: boolean; message: string } | null>(null);
 
-  const refreshControlPlane = () => {
+  const refreshControlPlane = useCallback(() => {
     getControlPlane()
       .then((data) => { setControlPlane(data); setControlPlaneFailed(false); })
       .catch(() => setControlPlaneFailed(true));
     getRuntimeStatus()
       .then((data) => { setRuntime(data); setRuntimeFailed(false); })
       .catch(() => setRuntimeFailed(true));
-  };
+  }, []);
 
   useEffect(() => {
     getHealth()
@@ -92,7 +92,7 @@ export default function Settings() {
         allowLiveUnlock,
         modeReason || undefined,
       );
-      setModeFeedback({ success: res.success, message: res.reason });
+      setModeFeedback({ success: res.success, message: res.guard_reason });
       if (res.success) {
         setModeReason('');
         setAllowLiveUnlock(false);

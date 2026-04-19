@@ -90,15 +90,15 @@ export interface ControlPlaneResponse {
 export type TradeMode = 'paused' | 'paper_auto' | 'live_shadow' | 'live_small_auto';
 
 export interface ModeChangeRequest {
-  mode: TradeMode;
+  to_mode: TradeMode;
   allow_live_unlock: boolean;
   reason?: string;
 }
 
 export interface ModeChangeResponse {
   success: boolean;
-  trade_mode: string;
-  reason: string;
+  current_mode: string;
+  guard_reason: string;
 }
 
 export interface LiveLockChangeRequest {
@@ -178,11 +178,11 @@ export async function setControlPlaneMode(
   const res = await fetch(`${BASE_URL}/runtime/control-plane/mode`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mode, allow_live_unlock: allowLiveUnlock, reason }),
+    body: JSON.stringify({ to_mode: mode, allow_live_unlock: allowLiveUnlock, reason }),
   });
   const data = await res.json() as ModeChangeResponse | { detail: string };
   if (!res.ok || (('success' in data) && !data.success)) {
-    const msg = 'detail' in data ? data.detail : (data as ModeChangeResponse).reason;
+    const msg = 'detail' in data ? data.detail : (data as ModeChangeResponse).guard_reason;
     throw new Error(msg);
   }
   return data as ModeChangeResponse;
