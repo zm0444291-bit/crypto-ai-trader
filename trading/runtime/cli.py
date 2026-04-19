@@ -11,6 +11,7 @@ import argparse
 import logging
 from decimal import Decimal
 
+from trading.ai.http_client import HttpAIScoringClient
 from trading.ai.scorer import AIScorer
 from trading.runtime.runner import (
     create_runner_session_factory,
@@ -24,26 +25,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
-
-
-class NoOpAIScorer:
-    """Stub AI scorer that returns a fail-closed score.
-
-    In production, replace with a real LLM-backed scorer.
-    """
-
-    def score(self, payload: dict) -> dict:
-        logger.warning(
-            "NoOpAIScorer is active — paper trading allows all candidates. "
-            "Replace with a real AIScorer for production."
-        )
-        return {
-            "ai_score": 75,
-            "market_regime": "trend",
-            "decision_hint": "allow",
-            "risk_flags": [],
-            "explanation": "No-op scorer: allow.",
-        }
 
 
 def main() -> None:
@@ -77,19 +58,21 @@ def main() -> None:
     args = parser.parse_args()
 
     session_factory = create_runner_session_factory()
-    ai_scorer: AIScorer = NoOpAIScorer()  # type: ignore[assignment]
+    scoring_client = HttpAIScoringClient()
+    ai_scorer = AIScorer(scoring_client)
 
     if args.once:
         logger.info("Running one paper trading cycle...")
         results = run_once(
             session_factory=session_factory,
-            ai_scorer=ai_scorer,  # type: ignore[arg-type]
+            ai_scorer=ai_scorer,
             symbols=args.symbols,
             initial_cash_usdt=args.initial_cash,
         )
         for r in results:
             logger.info(
                 "  %s: status=%s candidate_present=%s order_executed=%s",
+                r.symbol,
                 r.status,
                 r.candidate_present,
                 r.order_executed,
@@ -105,7 +88,7 @@ def main() -> None:
         cycles = run_loop(
             interval_seconds=args.interval,
             session_factory=session_factory,
-            ai_scorer=ai_scorer,  # type: ignore[arg-type]
+            ai_scorer=ai_scorer,
             max_cycles=args.max_cycles,
             symbols=args.symbols,
             initial_cash_usdt=args.initial_cash,

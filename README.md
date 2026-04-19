@@ -98,6 +98,16 @@ export TELEGRAM_CHAT_ID=your_chat_id
 make runtime-loop
 ```
 
+### AI scoring (optional)
+
+If `AI_SCORING_URL` is set, the runtime uses a remote AI scorer to evaluate candidates. When the URL is absent, scoring fails closed (all candidates rejected) — the cycle continues but no trades are executed.
+
+```bash
+export AI_SCORING_URL=https://your-ai-service.example.com/score
+export AI_SCORING_TIMEOUT=30
+make runtime-loop
+```
+
 ## Troubleshooting
 
 ### Dashboard shows "offline" or CORS errors
