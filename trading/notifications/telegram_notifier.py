@@ -80,8 +80,8 @@ class TelegramNotifier:
                 resp = client.post(url, data=payload)
                 resp.raise_for_status()
         except httpx.TimeoutException as exc:
-            log.warning("Telegram notification timed out: %s", exc)
+            log.error("Telegram notification timed out: %s", exc)
         except httpx.HTTPStatusError as exc:
-            log.warning("Telegram notification HTTP error: %s", exc)
+            log.error("Telegram notification HTTP error: %s", exc)
         except httpx.HTTPError as exc:
-            log.warning("Telegram notification failed: %s", exc)
+            log.error("Telegram notification failed: %s", exc)

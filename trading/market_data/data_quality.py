@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from pydantic import BaseModel
 
@@ -69,7 +69,11 @@ def check_candle_quality(candles: list[CandleData], now: datetime) -> DataQualit
                 )
             )
 
-    latest_age_seconds = (now - ordered[-1].open_time).total_seconds()
+    # Normalize naive datetimes to UTC to ensure safe subtraction
+    last_open_time = ordered[-1].open_time
+    if last_open_time.tzinfo is None:
+        last_open_time = last_open_time.replace(tzinfo=UTC)
+    latest_age_seconds = (now - last_open_time).total_seconds()
     if latest_age_seconds > interval_seconds * 2:
         issues.append(
             DataQualityIssue(

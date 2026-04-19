@@ -49,7 +49,9 @@ def _get_or_create_day_baseline(
     if event is not None:
         ctx = event.context_json or {}
         if ctx.get("date") == str(today_utc):
-            return Decimal(str(ctx["baseline"]))
+            baseline_str = ctx.get("baseline")
+            if baseline_str is not None:
+                return Decimal(str(baseline_str))
 
     # No baseline for today — create one using current equity
     baseline = max(current_equity, Decimal("0"))
