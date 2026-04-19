@@ -439,27 +439,27 @@ export default function App() {
 
   const fetchAll = () => {
     getHealth()
-      .then(setHealth)
+      .then((data) => { setHealth(data); setFailures((f) => ({ ...f, health: false })); })
       .catch(() => setFailures((f) => ({ ...f, health: true })));
 
     getRiskStatus(500, 500)
-      .then(setRisk)
+      .then((data) => { setRisk(data); setFailures((f) => ({ ...f, risk: false })); })
       .catch(() => setFailures((f) => ({ ...f, risk: true })));
 
     getPortfolioStatus(500)
-      .then(setPortfolio)
+      .then((data) => { setPortfolio(data); setFailures((f) => ({ ...f, portfolio: false })); })
       .catch(() => setFailures((f) => ({ ...f, portfolio: true })));
 
     getRecentOrders()
-      .then((r) => setOrders(r.orders))
+      .then((r) => { setOrders(r.orders); setFailures((f) => ({ ...f, orders: false })); })
       .catch(() => setFailures((f) => ({ ...f, orders: true })));
 
     getRecentEvents()
-      .then((r) => setEvents(r.events))
+      .then((r) => { setEvents(r.events); setFailures((f) => ({ ...f, events: false })); })
       .catch(() => setFailures((f) => ({ ...f, events: true })));
 
     getRuntimeStatus()
-      .then(setRuntime)
+      .then((data) => { setRuntime(data); setFailures((f) => ({ ...f, runtime: false })); })
       .catch(() => setFailures((f) => ({ ...f, runtime: true })));
 
     setLastUpdated(new Date());

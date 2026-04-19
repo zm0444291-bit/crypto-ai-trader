@@ -74,9 +74,9 @@ Override symbols: `make runtime-once RUNTIME_SYMBOLS=BTCUSDT,ETHUSDT`
 
 ### 4. Health checks
 
-- Backend API: `curl http://127.0.0.1:8000/api/health`
+- Backend API: `curl http://127.0.0.1:8000/health`
 - Dashboard: open `http://localhost:5173` — panels should populate after first runtime cycle
-- Runtime: check `http://127.0.0.1:8000/api/runtime/status`
+- Runtime: check `http://127.0.0.1:8000/runtime/status`
 
 ### 5. Known safe defaults
 
@@ -86,7 +86,7 @@ Override symbols: `make runtime-once RUNTIME_SYMBOLS=BTCUSDT,ETHUSDT`
 | Initial cash | 500 USDT |
 | Symbols | BTCUSDT, ETHUSDT, SOLUSDT |
 | Candle interval | 15m |
-| Database | SQLite at `data/crypto_trader.db` |
+| Database | SQLite at `data/crypto_ai_trader.sqlite3` |
 
 ### Telegram alerts (optional)
 

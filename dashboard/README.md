@@ -43,8 +43,8 @@ The backend only allows origins `http://127.0.0.1:5173` and `http://localhost:51
 ### Dashboard loads but panels are empty
 
 1. Run at least one runtime cycle: `make runtime-once`
-2. Check the backend health: `curl http://127.0.0.1:8000/api/health`
-3. Check the runtime status: `curl http://127.0.0.1:8000/api/runtime/status`
+2. Check the backend health: `curl http://127.0.0.1:8000/health`
+3. Check the runtime status: `curl http://127.0.0.1:8000/runtime/status`
 
 If the runtime has never run, there is no data to display.
 

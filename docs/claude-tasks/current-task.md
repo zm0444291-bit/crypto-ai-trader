@@ -1,116 +1,71 @@
-# Claude Code Repair Task: Dashboard Partial API Failure Visibility
+# Claude Code Repair Task: Fix Review Findings (Dependency + Recovery + Docs)
 
 You are the implementation worker for `/Users/zihanma/Desktop/crypto-ai-trader`.
 
-This is a small repair task for commit `a41c261 fix: repair dashboard local connectivity`. Keep the patch focused. Do not start a new feature.
+Fix all review findings below in one focused patch.
 
-## Problem To Fix
+## Findings To Fix
 
-The previous repair added a useful offline placeholder state, but `dashboard/src/App.tsx` only sets `offline` when every API response is missing:
+1. `pyproject.toml` is missing runtime dependency for Telegram notifier:
+   - `trading/notifications/telegram_notifier.py` imports `requests`
+   - add `requests` to `[project].dependencies` in `pyproject.toml`
+   - do **not** remove existing dependencies
 
-```ts
-const offline = !health && !risk && !portfolio && !orders && !events;
-```
+2. Dashboard failure flags never recover:
+   - in `dashboard/src/App.tsx`, each API success must clear its corresponding `failures.<panel>` flag back to `false`
+   - keep existing per-panel fallback behavior
+   - keep offline notice behavior (`hasApiFailure`) based on current failure state, not stale state
 
-That means if `/health` succeeds but `/risk/status`, `/portfolio/status`, `/orders/recent`, or `/events/recent` fails, the Dashboard does not show the offline/degraded notice and does not use placeholders for the failed panels. This violates the task requirement:
+3. README quickstart has wrong API paths and DB filename:
+   - in `README.md`, fix health/runtime URLs:
+     - `/api/health` -> `/health`
+     - `/api/runtime/status` -> `/runtime/status`
+   - fix DB filename reference:
+     - `data/crypto_trader.db` -> `data/crypto_ai_trader.sqlite3`
+   - keep all content paper-only, no live trading instructions
 
-> Keep the offline notice visible when any primary API call fails.
-
-## Required Behavior
-
-Update the Dashboard so it tracks API call failures explicitly.
-
-Requirements:
-
-- Show an offline/degraded notice if any primary API call fails.
-- Keep using real data for API calls that succeed.
-- Use placeholder/fallback data only for panels whose API call failed or has no data.
-- Required fallback values remain:
-  - mode: `paper_auto`
-  - live trading: disabled
-  - risk state: normal
-  - profile: small_balanced
-  - account equity: 500
-  - cash balance: 500
-  - today PnL: 0
-  - max trade risk: 7.5
-- If `/events/recent` fails, show the placeholder backend-offline event.
-- Do not show fake orders or fake open positions.
-- Avoid hiding successful data just because another endpoint failed.
-
-Implementation suggestion:
-
-- Add a small failure state object, for example:
-
-```ts
-const [failures, setFailures] = useState({
-  health: false,
-  risk: false,
-  portfolio: false,
-  orders: false,
-  events: false,
-});
-```
-
-- Set the corresponding key to `true` in each `.catch`.
-- Derive `hasApiFailure = Object.values(failures).some(Boolean)`.
-- Use per-panel fallback booleans such as `riskFailed`, `portfolioFailed`, and `eventsFailed`.
-
-## Files To Edit
-
-- `dashboard/src/App.tsx`
-- `docs/claude-tasks/last-result.md`
-
-Only edit CSS if necessary. Do not touch backend code unless you find a direct need.
+4. Dashboard README CORS guidance contradicts backend:
+   - in `dashboard/README.md`, align CORS section with backend allowlist:
+     - both `http://127.0.0.1:5173` and `http://localhost:5173` are allowed
+   - keep troubleshooting practical and concise
 
 ## Safety Rules
 
-Do not implement:
+- No order execution changes
+- No live trading changes
+- No Binance private API
+- No API key handling changes
+- No bypass of RiskEngine/ExecutionGate/LiveTradingLock
 
-- Order execution
-- Live trading
-- Binance private endpoints
-- API key handling
-- Secret storage
-- Any POST/PUT/PATCH/DELETE trading control endpoint
-- Any bypass of RiskEngine/ExecutionGate/LiveTradingLock
-
-This repair must remain frontend visibility only.
-
-## Verification
+## Verification (required)
 
 Run:
 
 ```bash
-cd dashboard
-npm run build
-cd ..
+cd /Users/zihanma/Desktop/crypto-ai-trader/dashboard && npm run build
+cd /Users/zihanma/Desktop/crypto-ai-trader
 .venv/bin/ruff check .
 .venv/bin/pytest -q
 git status --short
 ```
-
-The final `git status --short` should be clean except expected files staged/committed, and it must not show `.omc/`, `dashboard/dist`, or `dashboard/node_modules`.
 
 ## Commit
 
 If verification passes:
 
 ```bash
-git add dashboard/src/App.tsx docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
-git commit -m "fix: show dashboard partial API failures"
+git add pyproject.toml dashboard/src/App.tsx README.md dashboard/README.md docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
+git commit -m "fix: address dependency recovery and docs review findings"
 ```
-
-Do not commit unrelated files.
 
 ## Completion Report
 
-Write `docs/claude-tasks/last-result.md` with:
+Write `docs/claude-tasks/last-result.md` in this format:
 
 ```text
 # Last Claude Code Result
 
-Task: Dashboard Partial API Failure Visibility
+Task: Fix review findings (dependency + recovery + docs)
 Status: completed | failed
 
 Files changed:
@@ -123,14 +78,14 @@ Commit:
 - ...
 
 Safety:
-- No order execution added.
-- No private Binance API added.
-- No API key handling added.
-- No live trading added.
-- Dashboard remains read-only.
+- No order execution changes.
+- No live trading changes.
+- No private Binance API changes.
+- No API key handling changes.
 
 Notes:
 - ...
 ```
 
-Then stop. Do not start another task.
+Then stop.
+
