@@ -1,33 +1,25 @@
 # Last Claude Code Result
 
-Task: Unified Local Supervisor (Ingestion + Trading Loops)
+Task: Code review and fix (HIGH findings)
 Status: completed
 
 Files changed:
-- `trading/runtime/supervisor.py` (new): `run_supervisor()` starts `ingest_loop` and `run_loop` in separate threads sharing one stop event; records `supervisor_started`, `supervisor_stopped`, `supervisor_component_error` events; propagates exceptions from failed loops
-- `trading/runtime/cli.py`: extended with `--supervisor` mode and `--ingest-interval`, `--trade-interval` flags; existing `--once` and `--interval` modes preserved
-- `Makefile`: added `runtime-supervisor` target with `INGEST_INTERVAL` and `TRADE_INTERVAL` variables
-- `README.md`: updated quickstart to show supervisor as preferred single-terminal option; added supervisor intervals to known-safe defaults table
-- `tests/unit/test_runtime_supervisor.py` (new): 11 tests covering both-loop startup, thread joining, component error recording, dual-failure, interval defaults, invalid-interval guards, and CLI mode regression for `--once`/`--interval`
+- `trading/runtime/runner.py`: `_build_cycle_inputs` now uses `astimezone(UTC).replace(hour=0, ...)` to compute `today_start`, preserving the UTC timezone so the comparison with timezone-aware `Order.created_at` (via `DateTime(timezone=True)`) is valid and raises no TypeError
+- `trading/runtime/supervisor.py`: `_record_component_error` now logs a warning when DB recording fails, instead of silently swallowing the exception
 
 Verification:
-- `.venv/bin/ruff check trading/runtime/supervisor.py trading/runtime/cli.py tests/unit/test_runtime_supervisor.py` — all passed
-- `.venv/bin/pytest tests/unit/test_runtime_supervisor.py -q` — 11 passed
-- `.venv/bin/pytest -q` — 203 passed (up from 192)
+- `.venv/bin/ruff check trading/runtime/runner.py trading/runtime/supervisor.py` — all passed
+- `.venv/bin/pytest -q` — 203 passed
 - `.venv/bin/ruff check .` — all passed
-- `cd dashboard && npm run build` — built in 256ms
-- `git status --short` — clean
 
-Commit:
-- (pending)
+Commit: 5e458db
 
 Safety:
 - No live trading changes.
 - No private Binance API changes.
 - No API key handling changes.
-- Paper-only behavior preserved.
+- No risk-control bypass.
 
 Notes:
-- Supervisor uses a shared `ThreadingEvent` stop signal; KeyboardInterrupt sets it and both threads are joined with timeouts
-- If both loops fail, a combined `RuntimeError` is raised
-- If only one loop fails, that exception is propagated
+- HTTP client timeout (`httpx.Client(timeout=float)`) applies float to both connect and read — reviewer HIGH concern about indefinite hang was a false positive; httpx treats single float as total timeout default.
+- Telegram notifier `data=` parameter is correct for Telegram Bot API form-encoded endpoint — reviewer concern was a false positive.

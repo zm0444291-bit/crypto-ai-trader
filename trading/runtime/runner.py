@@ -133,7 +133,8 @@ def _build_cycle_inputs(
     )
 
     # Count today's orders per symbol
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Preserve UTC timezone so comparison with timezone-aware created_at is valid
+    today_start = now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     recent_orders = exec_repo.list_recent_orders(limit=1000)
     orders_today = [o for o in recent_orders if o.created_at >= today_start]
 

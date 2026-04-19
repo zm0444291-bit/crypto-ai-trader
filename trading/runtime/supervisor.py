@@ -140,8 +140,12 @@ def run_supervisor(
                 str(exc),
                 NotificationContext(error=str(exc)),
             )
-        except Exception:
-            pass  # never let error recording crash the supervisor
+        except Exception as record_exc:
+            logger.warning(
+                "Failed to record supervisor_component_error for %s: %s",
+                component,
+                record_exc,
+            )
 
     ingest_thread = threading.Thread(target=_ingestion_target, name="ingestion-loop")
     trade_thread = threading.Thread(target=_trading_target, name="trading-loop")
