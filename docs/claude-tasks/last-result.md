@@ -1,31 +1,40 @@
 # Last Claude Code Result
 
-Task: Milestone 4.2 Pre-Trade Risk Checks
+Task: Milestone 6.1 Local Dashboard Frontend Skeleton
 Status: completed
 
 Files changed:
-- trading/risk/pre_trade.py (new)
-- tests/unit/test_pre_trade_risk.py (new)
-- docs/claude-tasks/last-result.md
+- dashboard/package.json (new)
+- dashboard/index.html (new)
+- dashboard/tsconfig.json (new)
+- dashboard/vite.config.ts (new)
+- dashboard/src/main.tsx (new)
+- dashboard/src/App.tsx (new)
+- dashboard/src/api/client.ts (new)
+- dashboard/src/styles.css (new)
+- dashboard/README.md (new)
+- dashboard/src/vite-env.d.ts (new)
+- docs/claude-tasks/last-result.md (updated)
 
 Verification:
-- 17 unit tests passed
-- ruff check passed on all new files
-- Full pytest suite (120 tests) passed
-- ruff check passed on entire project
+- `cd dashboard && npm install` — succeeded (67 packages)
+- `npm run build` — succeeded (tsc + vite build, 272ms)
+- `ruff check .` — all checks passed
+- `pytest -q` — 145 passed in 0.43s
 
 Commit:
-- git add trading/risk/pre_trade.py tests/unit/test_pre_trade_risk.py docs/claude-tasks/last-result.md
-- git commit -m "feat: add pre-trade risk checks"
+- `git add dashboard docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md`
+- `git commit -m "feat: add local dashboard skeleton"`
 
 Safety:
 - No order execution added.
 - No private Binance API added.
 - No API key handling added.
 - No live trading added.
+- Dashboard remains read-only.
 
 Notes:
-- Implemented evaluate_pre_trade_risk function with all required reject rules
-- PortfolioRiskSnapshot and PreTradeRiskDecision models created as specified
-- 11 required test cases + 6 additional boundary tests (17 total)
-- All tests pass, ruff linting clean
+- Dashboard shows offline/fallback state when backend is not running.
+- Visual direction: professional quant terminal dark theme with cyan accent, 6px radius, no decorative blobs.
+- All 6 required sections rendered: status strip, metrics, positions, orders, events, safety banner.
+- Graceful degradation via `catch(() => {})` on all API calls.
