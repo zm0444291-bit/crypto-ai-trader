@@ -41,6 +41,7 @@ class TelegramNotifier:
         context: NotificationContext | None = None,
     ) -> None:
         if not self._enabled:
+            log.debug("Telegram notifier disabled (token or chat_id missing)")
             return
 
         body = self._format_message(level, title, message, context)
@@ -79,5 +80,3 @@ class TelegramNotifier:
             resp.raise_for_status()
         except requests.RequestException as exc:
             log.warning("Telegram notification failed: %s", exc)
-        except Exception as exc:
-            log.warning("Telegram notification unexpected error: %s", exc)

@@ -17,6 +17,11 @@ class PortfolioAccount(BaseModel):
     positions: dict[str, Position] = Field(default_factory=dict)
 
     def apply_buy_fill(self, fill: PaperFill) -> None:
+        if fill.side == "SELL":
+            raise NotImplementedError(
+                f"SELL fills are not supported yet. Symbol={fill.symbol}, qty={fill.qty}"
+            )
+
         gross_cost = fill.qty * fill.price
         total_cost = gross_cost + fill.fee_usdt
         self.cash_balance -= total_cost

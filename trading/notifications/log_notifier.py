@@ -37,4 +37,4 @@ class LogNotifier:
             case NotificationLevel.CRITICAL:
                 logger.critical("%s", full)
             case _:
-                logger.info("%s", full)
+                raise AssertionError(f"Unknown NotificationLevel: {level!r}")

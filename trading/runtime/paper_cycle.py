@@ -77,6 +77,7 @@ class CycleInput(BaseModel):
 class CycleResult(BaseModel):
     """Result of one paper trading cycle."""
 
+    symbol: str
     status: str
     candidate_present: bool
     ai_decision: dict[str, Any] | None
@@ -162,6 +163,7 @@ def run_paper_cycle(
         )
         event_ids.append(finished.id)
         return CycleResult(
+            symbol=input_data.symbol,
             status="no_signal",
             candidate_present=False,
             ai_decision=None,
@@ -228,6 +230,7 @@ def run_paper_cycle(
         )
         event_ids.append(finished.id)
         return CycleResult(
+            symbol=input_data.symbol,
             status="ai_rejected",
             candidate_present=candidate_present,
             ai_decision=ai_decision,
@@ -276,6 +279,7 @@ def run_paper_cycle(
         )
         event_ids.append(finished.id)
         return CycleResult(
+            symbol=input_data.symbol,
             status="risk_rejected",
             candidate_present=candidate_present,
             ai_decision=ai_decision,
@@ -298,6 +302,7 @@ def run_paper_cycle(
         )
         event_ids.append(finished.id)
         return CycleResult(
+            symbol=input_data.symbol,
             status="size_rejected",
             candidate_present=candidate_present,
             ai_decision=ai_decision,
@@ -333,6 +338,7 @@ def run_paper_cycle(
         )
         event_ids.append(finished.id)
         return CycleResult(
+            symbol=input_data.symbol,
             status="size_rejected",
             candidate_present=candidate_present,
             ai_decision=ai_decision,
@@ -391,6 +397,7 @@ def run_paper_cycle(
     event_ids.append(finished.id)
 
     return CycleResult(
+        symbol=input_data.symbol,
         status="executed" if order_executed else "no_execution",
         candidate_present=candidate_present,
         ai_decision=ai_decision,

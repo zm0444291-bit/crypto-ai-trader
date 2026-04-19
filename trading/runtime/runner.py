@@ -95,18 +95,17 @@ def _build_cycle_inputs(
     for o in orders_today:
         symbol_daily_trade_count_map[o.symbol] = symbol_daily_trade_count_map.get(o.symbol, 0) + 1
 
-    # Compute consecutive losses (simplified: count last 3 losing fills)
+    # Compute consecutive losses: count recent losing fills where current price
+    # is below the position's avg_entry_price (not the raw fill price)
     all_fills = exec_repo.list_fills_chronological()
     recent_fills = all_fills[-10:] if len(all_fills) > 10 else all_fills
-    # A fill is a "loss" if the subsequent market price is below avg entry
-    # Simplified: count fills where current price < avg_entry_price
     consecutive_losses = 0
     for fill in reversed(recent_fills):
         pos = account.positions.get(fill.symbol)
         if pos is None:
-            continue
-        current = market_prices.get(fill.symbol, fill.price)
-        if current < fill.price:
+            continue  # no open position — skip this fill
+        current = market_prices.get(fill.symbol, pos.avg_entry_price)
+        if current < pos.avg_entry_price:
             consecutive_losses += 1
         else:
             break
@@ -208,6 +207,7 @@ def run_once(
                 )
                 results.append(
                     CycleResult(
+                        symbol=input_data.symbol,
                         status="error",
                         candidate_present=False,
                         ai_decision=None,
@@ -300,7 +300,7 @@ def run_loop(
 
             logger.info("Running cycle %d", cycles_run + 1)
             try:
-                run_once(
+                cycle_results = run_once(
                     session_factory=session_factory,
                     ai_scorer=ai_scorer,
                     symbols=symbols,
@@ -308,7 +308,16 @@ def run_loop(
                     fee_bps=fee_bps,
                     slippage_bps=slippage_bps,
                     min_notional=min_notional,
+                    notifier=notify,
                 )
+                for result in cycle_results:
+                    logger.info(
+                        "  %s: status=%s candidate_present=%s order_executed=%s",
+                        result.symbol,
+                        result.status,
+                        result.candidate_present,
+                        result.order_executed,
+                    )
             except Exception as exc:
                 logger.exception("Cycle %d raised an unhandled exception", cycles_run + 1)
                 with session_factory() as session:

@@ -33,6 +33,10 @@ class NoOpAIScorer:
     """
 
     def score(self, payload: dict) -> dict:
+        logger.warning(
+            "NoOpAIScorer is active — paper trading allows all candidates. "
+            "Replace with a real AIScorer for production."
+        )
         return {
             "ai_score": 75,
             "market_regime": "trend",

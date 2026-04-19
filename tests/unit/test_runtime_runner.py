@@ -66,6 +66,7 @@ class TestRunOnce:
             from trading.runtime.paper_cycle import CycleResult
 
             return CycleResult(
+                symbol="BTCUSDT",
                 status="no_signal",
                 candidate_present=False,
                 ai_decision=None,
@@ -138,6 +139,7 @@ class TestRunOnce:
             from trading.runtime.paper_cycle import CycleResult
 
             return CycleResult(
+                symbol="BTCUSDT",
                 status="no_signal",
                 candidate_present=False,
                 ai_decision=None,
@@ -178,6 +180,7 @@ class TestRunLoop:
 
             return [
                 CycleResult(
+                    symbol="BTCUSDT",
                     status="no_signal",
                     candidate_present=False,
                     ai_decision=None,
@@ -220,6 +223,7 @@ class TestRunLoop:
 
             return [
                 CycleResult(
+                    symbol="BTCUSDT",
                     status="no_signal",
                     candidate_present=False,
                     ai_decision=None,
@@ -297,6 +301,7 @@ class TestRunLoop:
 
             return [
                 CycleResult(
+                    symbol="BTCUSDT",
                     status="no_signal",
                     candidate_present=False,
                     ai_decision=None,
