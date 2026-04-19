@@ -53,11 +53,13 @@ export default function Settings() {
   const [modeReason, setModeReason] = useState('');
   const [modeLoading, setModeLoading] = useState(false);
   const [modeFeedback, setModeFeedback] = useState<{ success: boolean; message: string } | null>(null);
+  const [modeDirty, setModeDirty] = useState(false);
 
   const [lockEnabled, setLockEnabled] = useState(false);
   const [lockReason, setLockReason] = useState('');
   const [lockLoading, setLockLoading] = useState(false);
   const [lockFeedback, setLockFeedback] = useState<{ success: boolean; message: string } | null>(null);
+  const [lockDirty, setLockDirty] = useState(false);
 
   const refreshControlPlane = useCallback(() => {
     getControlPlane()
@@ -67,6 +69,16 @@ export default function Settings() {
       .then((data) => { setRuntime(data); setRuntimeFailed(false); })
       .catch(() => setRuntimeFailed(true));
   }, []);
+
+  useEffect(() => {
+    if (!controlPlane) return;
+    if (!modeDirty && !modeLoading) {
+      setModeValue(controlPlane.trade_mode);
+    }
+    if (!lockDirty && !lockLoading) {
+      setLockEnabled(controlPlane.lock_enabled);
+    }
+  }, [controlPlane, modeDirty, modeLoading, lockDirty, lockLoading]);
 
   useEffect(() => {
     getHealth()
@@ -96,6 +108,7 @@ export default function Settings() {
       if (res.success) {
         setModeReason('');
         setAllowLiveUnlock(false);
+        setModeDirty(false);
         refreshControlPlane();
       }
     } catch (e) {
@@ -117,6 +130,7 @@ export default function Settings() {
       setLockFeedback({ success: res.success, message: res.reason });
       if (res.success) {
         setLockReason('');
+        setLockDirty(false);
         refreshControlPlane();
       }
     } catch (e) {
@@ -155,7 +169,9 @@ export default function Settings() {
         <div className="settings-title">System Info</div>
         <div className="settings-row">
           <span className="row-label">Mode</span>
-          <span className="row-value">{health?.trade_mode ?? '—'}</span>
+          <span className="row-value">
+            {controlPlane?.trade_mode ?? health?.trade_mode ?? '—'}
+          </span>
         </div>
         <div className="settings-row">
           <span className="row-label">Live Trading Enabled</span>
@@ -246,18 +262,24 @@ export default function Settings() {
             <select
               className="filter-select"
               value={modeValue}
-              onChange={(e) => setModeValue(e.target.value)}
+              onChange={(e) => {
+                setModeValue(e.target.value);
+                setModeDirty(true);
+              }}
             >
               {TRADE_MODES.map((m) => (
                 <option key={m} value={m}>{m}</option>
               ))}
             </select>
             <label className="toggle-label">
-              <input
-                type="checkbox"
-                checked={allowLiveUnlock}
-                onChange={(e) => setAllowLiveUnlock(e.target.checked)}
-              />
+                <input
+                  type="checkbox"
+                  checked={allowLiveUnlock}
+                  onChange={(e) => {
+                    setAllowLiveUnlock(e.target.checked);
+                    setModeDirty(true);
+                  }}
+                />
               <span>allow_live_unlock</span>
             </label>
           </div>
@@ -266,7 +288,10 @@ export default function Settings() {
             type="text"
             placeholder="reason (optional)"
             value={modeReason}
-            onChange={(e) => setModeReason(e.target.value)}
+            onChange={(e) => {
+              setModeReason(e.target.value);
+              setModeDirty(true);
+            }}
           />
           {modeFeedback && (
             <FeedbackBanner success={modeFeedback.success} message={modeFeedback.message} />
@@ -284,11 +309,14 @@ export default function Settings() {
           <div className="control-action-label">Live Lock</div>
           <div className="control-action-row">
             <label className="toggle-label">
-              <input
-                type="checkbox"
-                checked={lockEnabled}
-                onChange={(e) => setLockEnabled(e.target.checked)}
-              />
+                <input
+                  type="checkbox"
+                  checked={lockEnabled}
+                  onChange={(e) => {
+                    setLockEnabled(e.target.checked);
+                    setLockDirty(true);
+                  }}
+                />
               <span>enabled</span>
             </label>
           </div>
@@ -297,7 +325,10 @@ export default function Settings() {
             type="text"
             placeholder="reason (optional)"
             value={lockReason}
-            onChange={(e) => setLockReason(e.target.value)}
+            onChange={(e) => {
+              setLockReason(e.target.value);
+              setLockDirty(true);
+            }}
           />
           {lockFeedback && (
             <FeedbackBanner success={lockFeedback.success} message={lockFeedback.message} />
