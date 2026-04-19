@@ -58,6 +58,14 @@ export interface EventsSummary {
   created_at: string;
 }
 
+export interface RuntimeStatus {
+  last_cycle_status: string | null;
+  last_cycle_time: string | null;
+  last_error_message: string | null;
+  cycles_last_hour: number;
+  orders_last_hour: number;
+}
+
 // ── Fetch helper ──────────────────────────────────────────────────────────────
 
 async function apiFetch<T>(path: string): Promise<T> {
@@ -99,4 +107,8 @@ export async function getRecentOrders(): Promise<{ orders: OrderSummary[] }> {
 
 export async function getRecentEvents(): Promise<{ events: EventsSummary[] }> {
   return apiFetch<{ events: EventsSummary[] }>('/events/recent');
+}
+
+export async function getRuntimeStatus(): Promise<RuntimeStatus> {
+  return apiFetch<RuntimeStatus>('/runtime/status');
 }

@@ -91,6 +91,8 @@ body {
 
 .offline-notice svg { color: var(--warning); flex-shrink: 0; }
 
+.offline-notice svg { color: var(--warning); flex-shrink: 0; }
+
 /* ── Status strip ──────────────────────────────────────────────────────────── */
 .status-strip {
   display: flex;
@@ -302,4 +304,25 @@ body {
 .table-scroll {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+}
+
+/* ── Runtime grid ─────────────────────────────────────────────────────────── */
+.runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+@media (min-width: 640px) {
+  .runtime-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* ── Last updated stamp ──────────────────────────────────────────────────── */
+.last-updated {
+  margin-left: auto;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  font-family: var(--mono);
 }

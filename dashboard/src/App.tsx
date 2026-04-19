@@ -5,11 +5,13 @@ import {
   getPortfolioStatus,
   getRecentOrders,
   getRecentEvents,
+  getRuntimeStatus,
   type HealthStatus,
   type RiskStatus,
   type PortfolioStatus,
   type OrderSummary,
   type EventsSummary,
+  type RuntimeStatus,
 } from './api/client';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -92,6 +94,14 @@ const PLACEHOLDER_EVENTS: EventsSummary[] = [
   },
 ];
 
+const PLACEHOLDER_RUNTIME: RuntimeStatus = {
+  last_cycle_status: null,
+  last_cycle_time: null,
+  last_error_message: 'backend unavailable',
+  cycles_last_hour: 0,
+  orders_last_hour: 0,
+};
+
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 function SafetyBanner() {
@@ -115,6 +125,17 @@ function OfflineNotice() {
       </svg>
       <span>Backend offline — showing placeholder data</span>
     </div>
+  );
+}
+
+function LastUpdatedStamp({ date }: { date: Date | null }) {
+  if (!date) return null;
+  return (
+    <span className="last-updated">
+      Updated {date.toLocaleTimeString('en-US', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+      })}
+    </span>
   );
 }
 
@@ -341,6 +362,51 @@ function EventsSection({
   );
 }
 
+function RuntimeSection({
+  runtime,
+  lastUpdated,
+}: {
+  runtime: RuntimeStatus | null;
+  lastUpdated: Date | null;
+}) {
+  const display = runtime ?? PLACEHOLDER_RUNTIME;
+
+  return (
+    <div className="section">
+      <div className="section-header">
+        <span className="section-title">Runtime</span>
+        <LastUpdatedStamp date={lastUpdated} />
+      </div>
+      <div className="runtime-grid">
+        <div className="metric-card">
+          <div className="metric-label">Last Cycle</div>
+          <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
+            {display.last_cycle_status ?? '—'}
+          </div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Cycles / Hour</div>
+          <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
+            {display.cycles_last_hour}
+          </div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Orders / Hour</div>
+          <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
+            {display.orders_last_hour}
+          </div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Last Error</div>
+          <div className={`metric-value ${display.last_error_message ? 'negative' : (runtime ? '' : 'placeholder')}`}>
+            {display.last_error_message ?? (runtime ? 'none' : '—')}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 
 type ApiFailures = {
@@ -349,6 +415,7 @@ type ApiFailures = {
   portfolio: boolean;
   orders: boolean;
   events: boolean;
+  runtime: boolean;
 };
 
 export default function App() {
@@ -357,17 +424,20 @@ export default function App() {
   const [portfolio, setPortfolio] = useState<PortfolioStatus | null>(null);
   const [orders,    setOrders]    = useState<OrderSummary[] | null>(null);
   const [events,    setEvents]    = useState<EventsSummary[] | null>(null);
+  const [runtime,   setRuntime]   = useState<RuntimeStatus | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [failures,  setFailures]  = useState<ApiFailures>({
     health: false,
     risk: false,
     portfolio: false,
     orders: false,
     events: false,
+    runtime: false,
   });
 
   const hasApiFailure = Object.values(failures).some(Boolean);
 
-  useEffect(() => {
+  const fetchAll = () => {
     getHealth()
       .then(setHealth)
       .catch(() => setFailures((f) => ({ ...f, health: true })));
@@ -387,6 +457,18 @@ export default function App() {
     getRecentEvents()
       .then((r) => setEvents(r.events))
       .catch(() => setFailures((f) => ({ ...f, events: true })));
+
+    getRuntimeStatus()
+      .then(setRuntime)
+      .catch(() => setFailures((f) => ({ ...f, runtime: true })));
+
+    setLastUpdated(new Date());
+  };
+
+  useEffect(() => {
+    fetchAll();
+    const id = setInterval(fetchAll, 10_000);
+    return () => clearInterval(id);
   }, []);
 
   return (
@@ -415,6 +497,7 @@ export default function App() {
       <PositionsSection positions={failures.portfolio ? null : (portfolio?.positions ?? null)} />
       <OrdersSection orders={failures.orders ? null : orders} />
       <EventsSection events={events} isPlaceholder={failures.events} />
+      <RuntimeSection runtime={failures.runtime ? null : runtime} lastUpdated={lastUpdated} />
     </div>
   );
 }
