@@ -136,6 +136,7 @@ body {
 .dot-no-new     { background: var(--danger); }
 .dot-global     { background: var(--danger); }
 .dot-emergency  { background: var(--danger); animation: pulse 1s infinite; }
+.dot-stale      { background: var(--negative); animation: pulse 1s infinite; }
 .dot-disabled   { background: var(--text-muted); }
 .dot-placeholder{ background: var(--info); }
 
@@ -680,6 +681,32 @@ body {
   border: 1px solid rgba(255, 77, 77, 0.2);
   color: var(--negative);
 }
+
+/* ── Current Risk Reminders ───────────────────────────────────────────── */
+.reminder-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 0.8rem;
+  font-family: var(--mono);
+  border-bottom: 1px solid rgba(46, 46, 46, 0.4);
+}
+.reminder-row:last-child { border-bottom: none; }
+
+.reminder-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+.reminder-dot-danger  { background: var(--negative); }
+.reminder-dot-warning { background: var(--warning); }
+
+.reminder-message { flex: 1; line-height: 1.4; }
+.reminder-danger .reminder-message { color: var(--negative); }
+.reminder-warning .reminder-message { color: var(--warning); }
 
 /* ── Control action group ───────────────────────────────────────────────── */
 .control-action-group {

@@ -25,7 +25,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 pytest
-uvicorn trading.main:app --reload
+uvicorn trading.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 ## 24/7 Local Ops
@@ -55,8 +55,9 @@ Output is operator-friendly and compact — each check prints a short label and 
 | `/runtime/status` `supervisor_alive` | `true` — heartbeat within last 2 min |
 | `/runtime/status` `ingestion_thread_alive` | `true` |
 | `/runtime/status` `trading_thread_alive` | `true` |
-| `/runtime/status` `last_component_error` | `null` — no recent crashes |
-| `/risk/status` `risk_state` | `"normal"` with equity unchanged |
+| `/runtime/status` `heartbeat_stale_alerting` | `false` — no stale heartbeat |
+| `/runtime/status` `restart_exhausted_ingestion` | `false` |
+| `/runtime/status` `restart_exhausted_trading` | `false` |
 
 ### Inspect recent events
 
@@ -80,7 +81,7 @@ Press `Ctrl+C` — the supervisor handles shutdown cleanly, sets the stop event,
 | `supervisor_alive: false` | Check that the supervisor process is still running; re-run `make runtime-supervisor` |
 | `ingestion_thread_alive: false` | Run `make db-init` then restart supervisor |
 | `trading_thread_alive: false` | Check Telegram/AI scorer env vars; try `make runtime-once` for a single cycle |
-| `risk_state: no_new_positions/global_pause/emergency_stop` | Equity or risk constraints breached; review `python -m trading.runtime.event_tail --severity error --limit 50` |
+| `restart_exhausted_ingestion` or `restart_exhausted_trading` is `true` | Component exhausted; investigate root cause before restart |
 | `/risk/status` returns 500 | Run `make db-init` to ensure DB schema is current |
 | Dashboard shows stale data | Backend may be down; verify with `curl http://127.0.0.1:8000/health` |
 | Many `cycle_error` events | Run `make runtime-once` manually to see cycle-level error output |
@@ -125,12 +126,11 @@ make dashboard # Vite on http://localhost:5173 (in a second terminal)
 **Tab 2 — Runtime:**
 ```bash
 make runtime-once                      # run one cycle and exit
-make runtime-loop                       # run trading loop continuously (5min interval)
-make runtime-supervisor                # run ingestion + trading loops in one terminal (preferred)
+make runtime-supervisor                 # run ingestion + trading loops concurrently (preferred, 300s intervals)
 make runtime-supervisor INGEST_INTERVAL=120 TRADE_INTERVAL=60  # custom intervals
 ```
 
-Override symbols: `make runtime-loop RUNTIME_SYMBOLS=BTCUSDT,ETHUSDT`
+Override symbols: `make runtime-supervisor RUNTIME_SYMBOLS=BTCUSDT,ETHUSDT`
 
 ### 4. Health checks
 
@@ -157,7 +157,7 @@ If `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set, cycle errors and risk ev
 ```bash
 export TELEGRAM_BOT_TOKEN=your_token
 export TELEGRAM_CHAT_ID=your_chat_id
-make runtime-loop
+make runtime-supervisor
 ```
 
 ### AI scoring (optional)
@@ -168,7 +168,7 @@ By default (`AI_SCORING_BACKEND=http`), if `AI_SCORING_URL` is set, the runtime 
 export AI_SCORING_BACKEND=http
 export AI_SCORING_URL=https://your-ai-service.example.com/score
 export AI_SCORING_TIMEOUT=30
-make runtime-loop
+make runtime-supervisor
 ```
 
 MiniMax integration (OpenAI-compatible API):
@@ -181,7 +181,7 @@ export MINIMAX_API_KEY=your_minimax_api_key
 export MINIMAX_BASE_URL=https://api.minimax.io/v1
 export MINIMAX_MODEL=MiniMax-M2.1
 export MINIMAX_TIMEOUT=30
-make runtime-loop
+make runtime-supervisor
 ```
 
 ## Troubleshooting

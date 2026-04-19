@@ -327,8 +327,10 @@ function ExecutionStatusBanner({ runtime }: { runtime: RuntimeStatus | null }) {
 
   // Guard blocked — always show first, before any mode-specific text
   if (mode_transition_guard && mode_transition_guard.startsWith('blocked:')) {
-    label = `Blocked: ${mode_transition_guard.replace('blocked: ', '')}`;
+    const reason = mode_transition_guard.replace('blocked: ', '');
+    label = `Mode transition blocked — see Settings > Execution Control`;
     labelClass = 'exec-banner-blocked';
+    void reason; // stored in runtime.mode_transition_guard for Settings to surface
   } else if (live_trading_lock_enabled) {
     label = 'Live execution blocked — lock is active';
     labelClass = 'exec-banner-locked';
@@ -358,6 +360,35 @@ function ExecutionStatusBanner({ runtime }: { runtime: RuntimeStatus | null }) {
   );
 }
 
+// ── Status helpers ────────────────────────────────────────────────────────────
+
+/** Dot class for the heartbeat card — also reflects heartbeat_stale_alerting. */
+function heartbeatDotClass(alerting: boolean, supervisorAlive: boolean | null): string {
+  if (alerting) return 'dot-stale';
+  if (supervisorAlive === false) return 'dot-degraded';
+  if (supervisorAlive === true) return 'dot-normal';
+  return 'dot-disabled';
+}
+
+/** Human-readable label for the heartbeat / heartbeat-alerting card. */
+function heartbeatLabel(alerting: boolean, lastHeartbeat: string | null): { label: string; hint: string | null } {
+  if (alerting) {
+    return {
+      label: 'STALE',
+      hint: lastHeartbeat ? `Last seen ${fmtTime(lastHeartbeat)} — restart trader` : 'No heartbeat — restart trader',
+    };
+  }
+  return { label: 'OK', hint: null };
+}
+
+/** Human-readable label for the restart-exhausted card. */
+function restartExhaustedLabel(ingestion: boolean, trading: boolean): string {
+  if (ingestion && trading) return 'BOTH EXHAUSTED — check connections';
+  if (ingestion) return 'INGESTION EXHAUSTED — check data source';
+  if (trading) return 'TRADING EXHAUSTED — check exchange API';
+  return '—';
+}
+
 function RuntimeSection({
   runtime,
   lastUpdated,
@@ -367,12 +398,8 @@ function RuntimeSection({
 }) {
   const display = runtime ?? PLACEHOLDER_RUNTIME;
 
-  const heartbeatDot =
-    display.supervisor_alive === true
-      ? 'dot-normal'
-      : display.supervisor_alive === false
-        ? 'dot-degraded'
-        : 'dot-disabled';
+  const hbDot = heartbeatDotClass(display.heartbeat_stale_alerting, display.supervisor_alive);
+  const hbInfo = heartbeatLabel(display.heartbeat_stale_alerting, display.last_heartbeat_time);
 
   return (
     <div className="section">
@@ -383,9 +410,9 @@ function RuntimeSection({
       <ExecutionStatusBanner runtime={runtime} />
       <div className="runtime-grid">
         <div className="metric-card">
-          <div className="metric-label">Status</div>
+          <div className="metric-label">Heartbeat</div>
           <div className="metric-value">
-            <span className={`dot ${heartbeatDot}`} />
+            <span className={`dot ${hbDot}`} />
           </div>
         </div>
         <div className="metric-card">
@@ -396,14 +423,16 @@ function RuntimeSection({
         </div>
         <div className="metric-card">
           <div className="metric-label">Last Heartbeat</div>
-          <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
+          <div className={`metric-value ${display.heartbeat_stale_alerting ? 'negative' : (runtime ? '' : 'placeholder')}`}>
             {display.last_heartbeat_time ? fmtTime(display.last_heartbeat_time) : '—'}
           </div>
         </div>
         <div className="metric-card">
           <div className="metric-label">Heartbeat Alerting</div>
           <div className={`metric-value ${display.heartbeat_stale_alerting ? 'negative' : (runtime ? '' : 'placeholder')}`}>
-            {display.heartbeat_stale_alerting ? 'STALE' : 'OK'}
+            {display.heartbeat_stale_alerting
+              ? <span title={hbInfo.hint ?? undefined}>{hbInfo.label}</span>
+              : (runtime ? hbInfo.label : '—')}
           </div>
         </div>
         <div className="metric-card">
@@ -487,7 +516,7 @@ function RuntimeSection({
         <div className="metric-card">
           <div className="metric-label">Restart Exhausted</div>
           <div className={`metric-value ${(display.restart_exhausted_ingestion || display.restart_exhausted_trading) ? 'negative' : (runtime ? '' : 'placeholder')}`}>
-            {display.restart_exhausted_ingestion || display.restart_exhausted_trading ? 'YES' : 'NO'}
+            {restartExhaustedLabel(display.restart_exhausted_ingestion, display.restart_exhausted_trading)}
           </div>
         </div>
         <div className="metric-card">

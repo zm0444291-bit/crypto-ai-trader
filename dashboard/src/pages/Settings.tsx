@@ -54,12 +54,14 @@ export default function Settings() {
   const [modeLoading, setModeLoading] = useState(false);
   const [modeFeedback, setModeFeedback] = useState<{ success: boolean; message: string } | null>(null);
   const [modeDirty, setModeDirty] = useState(false);
+  const [modeApplying, setModeApplying] = useState(false);
 
   const [lockEnabled, setLockEnabled] = useState(false);
   const [lockReason, setLockReason] = useState('');
   const [lockLoading, setLockLoading] = useState(false);
   const [lockFeedback, setLockFeedback] = useState<{ success: boolean; message: string } | null>(null);
   const [lockDirty, setLockDirty] = useState(false);
+  const [lockApplying, setLockApplying] = useState(false);
 
   const refreshControlPlane = useCallback(() => {
     getControlPlane()
@@ -70,15 +72,17 @@ export default function Settings() {
       .catch(() => setRuntimeFailed(true));
   }, []);
 
+  // Sync form defaults from controlPlane — only when not dirty and not applying
   useEffect(() => {
     if (!controlPlane) return;
-    if (!modeDirty && !modeLoading) {
+    if (!modeDirty && !modeApplying) {
       setModeValue(controlPlane.trade_mode);
     }
-    if (!lockDirty && !lockLoading) {
+    if (!lockDirty && !lockApplying) {
       setLockEnabled(controlPlane.lock_enabled);
+      setLockReason(controlPlane.lock_reason ?? '');
     }
-  }, [controlPlane, modeDirty, modeLoading, lockDirty, lockLoading]);
+  }, [controlPlane, modeDirty, modeApplying, lockDirty, lockApplying]);
 
   useEffect(() => {
     getHealth()
@@ -96,6 +100,7 @@ export default function Settings() {
   }, []);
 
   const handleApplyMode = async () => {
+    setModeApplying(true);
     setModeLoading(true);
     setModeFeedback(null);
     try {
@@ -109,17 +114,19 @@ export default function Settings() {
         setModeReason('');
         setAllowLiveUnlock(false);
         setModeDirty(false);
-        refreshControlPlane();
+        await refreshControlPlane();
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Unexpected error';
       setModeFeedback({ success: false, message: msg });
     } finally {
       setModeLoading(false);
+      setModeApplying(false);
     }
   };
 
   const handleApplyLock = async () => {
+    setLockApplying(true);
     setLockLoading(true);
     setLockFeedback(null);
     try {
@@ -131,13 +138,14 @@ export default function Settings() {
       if (res.success) {
         setLockReason('');
         setLockDirty(false);
-        refreshControlPlane();
+        await refreshControlPlane();
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Unexpected error';
       setLockFeedback({ success: false, message: msg });
     } finally {
       setLockLoading(false);
+      setLockApplying(false);
     }
   };
 
@@ -165,12 +173,57 @@ export default function Settings() {
         </div>
       )}
 
+      {/* ── Current Risk Reminders (read-only, derived from runtime/control-plane) ── */}
+      {!runtimeFailed && runtime && (
+        (() => {
+          const reminders: { severity: 'danger' | 'warning'; message: string }[] = [];
+          if (runtime.heartbeat_stale_alerting) {
+            reminders.push({
+              severity: 'danger',
+              message: 'Heartbeat stale — restart the trader process',
+            });
+          }
+          if (runtime.restart_exhausted_ingestion) {
+            reminders.push({
+              severity: 'danger',
+              message: 'Ingestion restart loop exhausted — verify data source connectivity',
+            });
+          }
+          if (runtime.restart_exhausted_trading) {
+            reminders.push({
+              severity: 'danger',
+              message: 'Trading restart loop exhausted — check exchange API credentials',
+            });
+          }
+          if (runtime.live_trading_lock_enabled) {
+            reminders.push({
+              severity: 'warning',
+              message: 'Live trading lock active — live orders blocked',
+            });
+          }
+          if (reminders.length === 0) return null;
+          return (
+            <div className="settings-section">
+              <div className="settings-title">Current Risk Reminders</div>
+              {reminders.map((r, i) => (
+                <div key={i} className={`reminder-row reminder-${r.severity}`}>
+                  <span className={`reminder-dot reminder-dot-${r.severity}`} />
+                  <span className="reminder-message">{r.message}</span>
+                </div>
+              ))}
+            </div>
+          );
+        })()
+      )}
+
       <div className="settings-section">
         <div className="settings-title">System Info</div>
         <div className="settings-row">
           <span className="row-label">Mode</span>
           <span className="row-value">
-            {controlPlane?.trade_mode ?? health?.trade_mode ?? '—'}
+            {controlPlaneFailed
+              ? (runtime?.trade_mode ?? health?.trade_mode ?? '—')
+              : (controlPlane?.trade_mode ?? runtime?.trade_mode ?? health?.trade_mode ?? '—')}
           </span>
         </div>
         <div className="settings-row">
