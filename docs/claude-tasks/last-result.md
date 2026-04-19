@@ -1,8 +1,8 @@
-# Task: Shadow Execution Recording Pipeline for live_shadow Mode
+# Task: Dashboard Control Plane Interactions
 
 ## Goal
 
-Implement a paper-safe shadow execution recording pipeline for `live_shadow` mode that records hypothetical execution plans/results only. Must NOT place real orders.
+Add a "Security Control Panel" to the Dashboard Settings page for initiating mode switches and live-lock toggling with result/error feedback.
 
 ## Status
 
@@ -10,106 +10,86 @@ Implement a paper-safe shadow execution recording pipeline for `live_shadow` mod
 
 ## Changes
 
-### 1. Data Model (`trading/storage/models.py`)
+### 1. API Client (`dashboard/src/api/client.ts`)
 
-- Added `ShadowExecution` ORM model with fields:
-  - `id` (primary key)
-  - `symbol`
-  - `side`
-  - `planned_notional_usdt`
-  - `reference_price`
-  - `simulated_fill_price`
-  - `simulated_slippage_bps`
-  - `decision_reason`
-  - `source_cycle_status` (optional)
-  - `created_at` (indexed)
-- Table `shadow_executions` auto-created via `Base.metadata.create_all()`
+- Added TypeScript types: `TradeMode`, `ModeChangeRequest`, `ModeChangeResponse`, `LiveLockChangeRequest`, `LiveLockChangeResponse`
+- Added `setControlPlaneMode(mode, allowLiveUnlock, reason?)` — POST `/runtime/control-plane/mode`
+- Added `setLiveLock(enabled, reason?)` — POST `/runtime/control-plane/live-lock`
+- Both throw on failure with the backend `reason`/`detail` message
 
-### 2. Repository Support (`trading/storage/repositories.py`)
+### 2. Settings Page (`dashboard/src/pages/Settings.tsx`)
 
-- Added `ShadowExecutionRepository` class with methods:
-  - `record_shadow_execution(...)` — persists a shadow record and returns it
-  - `list_recent_shadow(limit=50)` — returns newest-first list
-  - `count_last_hour(cutoff)` — counts records created after cutoff datetime
+New "Execution Control Actions" section with:
 
-### 3. Execution Gate Integration (`trading/runtime/paper_cycle.py`)
+**Mode control block:**
+- `<select>` for `mode` (paused / paper_auto / live_shadow / live_small_auto)
+- Checkbox for `allow_live_unlock`
+- Text input for optional `reason`
+- "Apply Mode" button with loading state
+- Feedback banner (green ✓ / red ✗) after response
 
-- When gate route is `shadow` (live_shadow mode):
-  - Does NOT call `PaperExecutor.execute_market_buy` — no real order
-  - Computes simulated fill price using same slippage formula as PaperExecutor
-  - Creates and persists shadow execution record via `ShadowExecutionRepository`
-  - Emits `shadow_execution_recorded` event
-  - Finishes cycle with status `shadow_recorded`
-- `paper_auto` route behavior unchanged — still executes paper orders
-- `blocked` routes remain blocked
+**Live Lock control block:**
+- Checkbox for `enabled`
+- Text input for optional `reason`
+- "Apply Lock" button with loading state
+- Feedback banner after response
 
-### 4. Runtime Status Visibility (`trading/dashboard_api/routes_runtime.py`)
+**State refresh:** After a successful operation, fetches fresh `/runtime/status` and `/runtime/control-plane`
 
-- Extended `RuntimeStatusResponse` with:
-  - `shadow_executions_last_hour: int` — count of shadow records in last hour
-  - `last_shadow_time: str | None` — ISO timestamp of most recent shadow record
-- Safe defaults (0 / null) when DB unavailable or no data
-- Both fields appear in all three return paths (early-exception, success, late-exception)
+**Guard warning:** When `transition_guard_to_live_small_auto` starts with `blocked:`, displays a prominent warning banner above the form
 
-### 5. Dashboard Visibility (`dashboard/src/pages/Overview.tsx`, `dashboard/src/api/client.ts`)
+### 3. Backend Endpoints (`trading/dashboard_api/routes_runtime.py`)
 
-- `RuntimeStatus` TypeScript interface extended with new fields
-- `PLACEHOLDER_RUNTIME` updated with safe defaults
-- Added two new metric cards in Runtime section:
-  - **Shadow / Hour** — shows `shadow_executions_last_hour`
-  - **Last Shadow** — shows formatted `last_shadow_time` or `—`
+- `POST /runtime/control-plane/mode` — validates transition, persists mode, returns `ModeChangeResponse`
+- `POST /runtime/control-plane/live-lock` — persists lock state, returns `LiveLockChangeResponse`
+- Both are fail-closed (any exception returns error response without state change)
+- No live trading is triggered by these endpoints
+
+### 4. Styles (`dashboard/src/styles.css`)
+
+Added minimal styles for new UI elements:
+- `.guard-warning-banner` — red alert banner for active transition guard
+- `.feedback-banner` / `.feedback-success` / `.feedback-error` — result feedback
+- `.control-action-group` / `.control-action-label` / `.control-action-row`
+- `.control-input` — text input styling
+- `.control-btn` — action button with hover/disabled states
+- `.toggle-label` — checkbox label with accent color
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `trading/storage/models.py` | Added `ShadowExecution` model |
-| `trading/storage/repositories.py` | Added `ShadowExecutionRepository` |
-| `trading/runtime/paper_cycle.py` | Added shadow route handling in cycle |
-| `trading/dashboard_api/routes_runtime.py` | Added shadow fields to RuntimeStatusResponse |
-| `dashboard/src/api/client.ts` | Added shadow fields to RuntimeStatus interface |
-| `dashboard/src/pages/Overview.tsx` | Added Shadow/Hour and Last Shadow metric cards |
-| `tests/unit/test_shadow_execution_repository.py` | New file — repository unit tests |
-| `tests/unit/test_paper_cycle.py` | Added shadow route tests + paper_auto regression test |
-| `tests/integration/test_runtime_status_api.py` | Added shadow field tests + empty-db shadow assertions |
+| `dashboard/src/api/client.ts` | Added `setControlPlaneMode`, `setLiveLock`, new types |
+| `dashboard/src/pages/Settings.tsx` | Added control panel UI with mode/lock actions |
+| `dashboard/src/styles.css` | Added control panel, feedback, guard warning styles |
+| `trading/dashboard_api/routes_runtime.py` | Added `POST /mode` and `POST /live-lock` endpoints |
 
 ## Verification
 
 ```bash
 # Backend lint
-.venv/bin/ruff check .
-# All checks passed
-
-# Backend tests
-.venv/bin/pytest -q
-# 288 passed in 2.40s
+.venv/bin/ruff check .           # All checks passed
 
 # Frontend build
-cd dashboard && npm run build
-# ✓ built in 361ms
-
-# Git status
-git status --short
-#  M tests/unit/test_paper_cycle.py
-#  M tests/integration/test_runtime_status_api.py
-# (implementation files already in HEAD from prior work)
+cd dashboard && npm run build     # ✓ built in 357ms
 ```
 
 ## Commit
 
 ```bash
-git add tests/unit/test_paper_cycle.py tests/integration/test_runtime_status_api.py
-git commit -m "feat: add shadow execution recording pipeline for live_shadow mode"
+git add dashboard/src/api/client.ts dashboard/src/pages/Settings.tsx \
+       dashboard/src/styles.css trading/dashboard_api/routes_runtime.py \
+       docs/claude-tasks/last-result.md
+git commit -m "feat: add dashboard control panel for mode and live-lock changes"
 ```
 
 ## Safety Checklist
 
-- [x] No real order placement — shadow mode only records hypotheticals
-- [x] No private Binance API integration
-- [x] No live exchange client wiring
-- [x] No API keys for trading used or added
-- [x] No bypass of risk/kill-switch/gate — all safety checks remain intact
-- [x] paper_auto mode behavior unchanged — still executes paper orders
-- [x] blocked routes remain blocked
-- [x] All new fields have safe defaults (0 / null)
-- [x] Dashboard is read-only — no trading controls added
+- [x] No live trading — endpoints only change mode/lock state, ExecutionGate remains
+- [x] No private Binance API — no key handling changes
+- [x] No write endpoints for order placement
+- [x] No bypass of risk/kill-switch/ExecutionGate
+- [x] Fail-closed: any exception returns error without state mutation
+- [x] Error messages from backend shown to user, not swallowed
+- [x] Loading states during async operations
+- [x] Guard warning banner shown when transition is blocked

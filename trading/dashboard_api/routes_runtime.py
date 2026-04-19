@@ -14,7 +14,6 @@ from trading.storage.db import create_database_engine, create_session_factory, i
 from trading.storage.repositories import (
     EventsRepository,
     ExecutionRecordsRepository,
-    RuntimeControlRepository,
     ShadowExecutionRepository,
 )
 

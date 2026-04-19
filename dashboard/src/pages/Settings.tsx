@@ -4,7 +4,6 @@ import {
   getRuntimeStatus,
   getMarketDataStatus,
   getControlPlane,
-  getRuntimeStatus as _refreshRuntime,
   setControlPlaneMode,
   setLiveLock,
   type HealthStatus,
@@ -63,7 +62,7 @@ export default function Settings() {
     getControlPlane()
       .then((data) => { setControlPlane(data); setControlPlaneFailed(false); })
       .catch(() => setControlPlaneFailed(true));
-    _refreshRuntime()
+    getRuntimeStatus()
       .then(setRuntime)
       .catch(() => {});
   };
