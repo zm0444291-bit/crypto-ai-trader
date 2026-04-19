@@ -50,27 +50,23 @@ Creates `data/crypto_trader.db` (SQLite) and runs all migrations. Safe to re-run
 
 ### 3. Start services
 
-Open three terminal tabs:
+Open two terminal tabs:
 
-**Tab 1 — Backend API:**
+**Tab 1 — Backend API + Dashboard (concurrent):**
 ```bash
-make backend
-```
-Starts FastAPI on `http://127.0.0.1:8000`. API docs at `http://127.0.0.1:8000/docs`.
-
-**Tab 2 — Dashboard:**
-```bash
-make dashboard
-```
-Starts Vite dev server on `http://localhost:5173`. The dashboard is read-only and paper-oriented.
-
-**Tab 3 — Runtime loop (optional):**
-```bash
-make runtime-once                    # run one cycle and exit
-make runtime-loop RUNTIME_INTERVAL=60  # run every 60 seconds
+make backend   # FastAPI on http://127.0.0.1:8000
+make dashboard # Vite on http://localhost:5173 (in a second terminal)
 ```
 
-Override symbols: `make runtime-once RUNTIME_SYMBOLS=BTCUSDT,ETHUSDT`
+**Tab 2 — Runtime:**
+```bash
+make runtime-once                      # run one cycle and exit
+make runtime-loop                       # run trading loop continuously (5min interval)
+make runtime-supervisor                # run ingestion + trading loops in one terminal (preferred)
+make runtime-supervisor INGEST_INTERVAL=120 TRADE_INTERVAL=60  # custom intervals
+```
+
+Override symbols: `make runtime-loop RUNTIME_SYMBOLS=BTCUSDT,ETHUSDT`
 
 ### 4. Health checks
 
@@ -87,6 +83,8 @@ Override symbols: `make runtime-once RUNTIME_SYMBOLS=BTCUSDT,ETHUSDT`
 | Symbols | BTCUSDT, ETHUSDT, SOLUSDT |
 | Candle interval | 15m |
 | Database | SQLite at `data/crypto_ai_trader.sqlite3` |
+| Supervisor ingest interval | 300s |
+| Supervisor trade interval | 300s |
 
 ### Telegram alerts (optional)
 

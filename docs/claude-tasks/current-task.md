@@ -1,83 +1,100 @@
-# Claude Code Repair Task: Fix Daily Risk Baseline + Freshness Timezone + CORS Docs
+# Claude Code Task: Unified Local Supervisor (Ingestion + Trading Loops)
 
 You are the implementation worker for `/Users/zihanma/Desktop/crypto-ai-trader`.
 
-Fix all 3 review findings in one focused patch.
+## Goal
 
-## Findings To Fix
+Create a single local supervisor that can run both:
+1) market data ingestion loop
+2) paper trading runtime loop
 
-### 1) P1: `day_start_equity` resets each cycle (risk gate weakened)
+in one command, with clean startup/shutdown and clear event visibility.
 
-File: `trading/runtime/runner.py`
+This should improve local operability while staying strictly paper-only.
 
-Current bug:
-- `_build_cycle_inputs` sets `day_start_equity = account_equity` every cycle.
-- This collapses daily loss toward zero and prevents proper `degraded/no_new/global_pause` transitions.
+## Read First
 
-Required fix:
-- Persist and reuse a daily opening equity baseline.
-- Baseline behavior:
-  - On first cycle of a UTC day, create/open baseline for that day.
-  - Reuse same baseline for all cycles in that day.
-  - On next UTC day, create a new baseline.
-- Keep implementation simple and local-first:
-  - You may store baseline in runtime events (`event_type` like `day_start_equity_set`) and read it back.
-  - Or add a minimal storage table/model if cleaner, but keep scope small.
-- Ensure `CycleInput.day_start_equity` uses this persisted baseline, not current equity.
+- `trading/runtime/runner.py`
+- `trading/runtime/cli.py`
+- `trading/market_data/ingestion_runner.py`
+- `trading/storage/repositories.py`
+- `trading/main.py`
+- `README.md`
+- `Makefile`
 
-Add tests:
-- update/add tests in `tests/unit/test_runtime_runner.py` (or a focused new test file)
-- cover:
-  - same day: second cycle reuses first baseline
-  - next day: baseline rotates to new day
-  - baseline value not overwritten within same day
+## Requirements
 
-### 2) P2: market data freshness aware/naive datetime mismatch
+1. Create module:
+   - `trading/runtime/supervisor.py`
 
-File: `trading/dashboard_api/routes_market_data.py`
+2. Implement:
+   - `run_supervisor(...)` that starts ingestion loop and trading loop concurrently
+   - Use threads (or another simple in-process concurrency model) with shared stop signal
+   - Graceful shutdown on KeyboardInterrupt:
+     - stop signal set
+     - both loops joined with timeout
+     - supervisor exit event recorded
 
-Current risk:
-- `_is_fresh` uses `datetime.now(UTC)` (aware) while SQLite often returns naive datetimes.
-- Subtraction can error and status falls back to `unknown`.
+3. Event logging:
+   - record:
+     - `supervisor_started`
+     - `supervisor_stopped`
+     - `supervisor_component_error` (if any loop crashes unexpectedly)
+   - include structured context with intervals and symbols
 
-Required fix:
-- Normalize timezone semantics before subtraction.
-- Choose one consistent approach:
-  - normalize both to naive UTC, or
-  - normalize both to aware UTC.
-- Make `_is_fresh` deterministic for both naive and aware `latest_ts`.
+4. CLI integration:
+   - extend `trading/runtime/cli.py` with a new mode:
+     - `python -m trading.runtime.cli --supervisor`
+   - add optional flags:
+     - `--ingest-interval` (default 300)
+     - `--trade-interval` (default 300)
+     - `--max-cycles` (optional, passed to both loops for bounded test runs)
 
-Add tests:
-- extend `tests/integration/test_market_data_api.py` and/or add unit tests for `_is_fresh`
-- cover both naive and aware timestamp inputs.
+5. Keep existing modes working:
+   - `--once`
+   - `--interval`
+   - no behavior regressions
 
-### 3) P3: dashboard CORS docs contradiction
+6. Add Makefile convenience target:
+   - `runtime-supervisor`
+   - uses `.venv/bin/python -m trading.runtime.cli --supervisor ...`
 
-File: `dashboard/README.md`
+7. Update docs:
+   - `README.md` quickstart: add supervisor mode as the preferred "single terminal" runtime option
+   - keep paper-only safety wording
 
-Required fix:
-- In CORS troubleshooting section, make wording consistent:
-  - both `http://127.0.0.1:5173` and `http://localhost:5173` are valid
-  - emphasize matching actual Vite port.
-- Remove contradictory sentence that implies `127.0.0.1:5173` is invalid.
+## Safety Constraints
 
-## Safety Rules
-
-- No live trading changes
-- No order execution logic changes (except risk baseline input correctness)
-- No Binance private endpoints
+- No live trading
+- No private Binance endpoints
 - No API key handling changes
-- No bypass of risk controls
+- No trading execution behavior expansion beyond existing paper flow
+- No write APIs in dashboard
+
+## Tests
+
+Add unit tests:
+- `tests/unit/test_runtime_supervisor.py`
+
+Cover at least:
+1. starts both components with expected arguments
+2. KeyboardInterrupt/shutdown sets stop signal and joins threads
+3. component exception records `supervisor_component_error` and exits safely
+4. existing CLI modes (`--once`, `--interval`) still parse and run path selection correctly
+
+If needed, add focused tests in `tests/unit/test_runtime_cli.py`.
 
 ## Verification (required)
 
 Run:
 
 ```bash
-cd /Users/zihanma/Desktop/crypto-ai-trader/dashboard && npm run build
-cd /Users/zihanma/Desktop/crypto-ai-trader
-.venv/bin/ruff check .
+.venv/bin/pytest tests/unit/test_runtime_supervisor.py -q
+.venv/bin/ruff check trading/runtime/supervisor.py trading/runtime/cli.py tests/unit/test_runtime_supervisor.py
 .venv/bin/pytest -q
+.venv/bin/ruff check .
+cd dashboard && npm run build
+cd ..
 git status --short
 ```
 
@@ -86,18 +103,18 @@ git status --short
 If verification passes:
 
 ```bash
-git add trading/runtime/runner.py trading/dashboard_api/routes_market_data.py tests dashboard/README.md docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
-git commit -m "fix: restore daily risk baseline and freshness timezone handling"
+git add trading/runtime/supervisor.py trading/runtime/cli.py tests/unit/test_runtime_supervisor.py Makefile README.md docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
+git commit -m "feat: add unified local runtime supervisor"
 ```
 
 ## Completion Report
 
-Write `docs/claude-tasks/last-result.md` in this format:
+Write `docs/claude-tasks/last-result.md`:
 
 ```text
 # Last Claude Code Result
 
-Task: Fix daily risk baseline + freshness timezone + CORS docs
+Task: Unified Local Supervisor (Ingestion + Trading Loops)
 Status: completed | failed
 
 Files changed:
@@ -113,6 +130,7 @@ Safety:
 - No live trading changes.
 - No private Binance API changes.
 - No API key handling changes.
+- Paper-only behavior preserved.
 
 Notes:
 - ...
