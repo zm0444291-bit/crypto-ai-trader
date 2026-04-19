@@ -27,3 +27,121 @@ pip install -e ".[dev]"
 pytest
 uvicorn trading.main:app --reload
 ```
+
+## Local Paper Trading Quickstart
+
+This system runs **paper trading only** — no real funds are used. All trading is simulated against live market data.
+
+### 1. Install dependencies
+
+```bash
+make install
+```
+
+This creates a virtual environment (`.venv`) and installs all dependencies.
+
+### 2. Initialize the database
+
+```bash
+make db-init
+```
+
+Creates `data/crypto_trader.db` (SQLite) and runs all migrations. Safe to re-run.
+
+### 3. Start services
+
+Open three terminal tabs:
+
+**Tab 1 — Backend API:**
+```bash
+make backend
+```
+Starts FastAPI on `http://127.0.0.1:8000`. API docs at `http://127.0.0.1:8000/docs`.
+
+**Tab 2 — Dashboard:**
+```bash
+make dashboard
+```
+Starts Vite dev server on `http://localhost:5173`. The dashboard is read-only and paper-oriented.
+
+**Tab 3 — Runtime loop (optional):**
+```bash
+make runtime-once                    # run one cycle and exit
+make runtime-loop RUNTIME_INTERVAL=60  # run every 60 seconds
+```
+
+Override symbols: `make runtime-once RUNTIME_SYMBOLS=BTCUSDT,ETHUSDT`
+
+### 4. Health checks
+
+- Backend API: `curl http://127.0.0.1:8000/api/health`
+- Dashboard: open `http://localhost:5173` — panels should populate after first runtime cycle
+- Runtime: check `http://127.0.0.1:8000/api/runtime/status`
+
+### 5. Known safe defaults
+
+| Setting | Value |
+|---------|-------|
+| Mode | Paper only (no live trading) |
+| Initial cash | 500 USDT |
+| Symbols | BTCUSDT, ETHUSDT, SOLUSDT |
+| Candle interval | 15m |
+| Database | SQLite at `data/crypto_trader.db` |
+
+### Telegram alerts (optional)
+
+If `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set, cycle errors and risk events are sent to Telegram. Without them the system logs to Python logger and continues normally.
+
+```bash
+export TELEGRAM_BOT_TOKEN=your_token
+export TELEGRAM_CHAT_ID=your_chat_id
+make runtime-loop
+```
+
+## Troubleshooting
+
+### Dashboard shows "offline" or CORS errors
+
+The backend CORS whitelist is set to `http://127.0.0.1:5173` and `http://localhost:5173`. If you access the dashboard on a different port or hostname, the API requests are blocked.
+
+Fix: Only access the dashboard at `http://localhost:5173` (or the port shown in the Vite output).
+
+### Port conflicts (8000 or 5173 already in use)
+
+Check what is using the port:
+
+```bash
+# macOS
+lsof -i :8000
+lsof -i :5173
+```
+
+Override the default port:
+
+```bash
+make backend BACKEND_PORT=8001
+# Then set VITE_API_BASE_URL=http://localhost:8001 in dashboard tab
+make dashboard
+```
+
+### Telegram notifications not working
+
+1. Verify env vars are set:
+   ```bash
+   echo $TELEGRAM_BOT_TOKEN
+   echo $TELEGRAM_CHAT_ID
+   ```
+2. Test the bot directly: open `https://api.telegram.org/bot<TOKEN>/getUpdates` in a browser
+3. If the bot is silent, the runtime logs a warning — check Python logger output for `trading.alerts.telegram`
+4. Missing env vars are **not errors** — the system falls back to logger-only notifications automatically
+
+### Database locked or missing
+
+If you see SQLite errors, ensure the process writing to the DB is not running multiple instances simultaneously. The runtime loop and backend can both access the same DB file concurrently (SQLite handles this), but running two loops at once can cause locking.
+
+### Runtime cycle throws "cycle_error" immediately
+
+Check:
+1. Market data: the cycle needs recent 15m candles in the DB. If the DB is brand new, run `make runtime-once` a few times to pull in data.
+2. AI scorer is a stub (`NoOpAIScorer`) that always allows — this is expected for paper trading.
+
