@@ -35,10 +35,10 @@ make backend
 
 ### CORS blocked requests
 
-The backend allows both `http://127.0.0.1:5173` and `http://localhost:5173`. If you see CORS errors:
+Both `http://127.0.0.1:5173` and `http://localhost:5173` are valid dashboard origins. If you see CORS errors:
 
-1. Make sure you are accessing the dashboard at the exact URL shown when Vite starts — the port is printed in its startup output, for example `http://localhost:5173`
-2. Do not mix `127.0.0.1` and `localhost` if your browser treats them as different origins
+1. Check the URL in your browser address bar — use whichever host (`127.0.0.1` or `localhost`) is printed in the Vite startup output
+2. Be consistent: do not switch between `127.0.0.1` and `localhost` in the same browser session, as they may be treated as separate origins
 
 ### Dashboard loads but panels are empty
 

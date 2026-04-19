@@ -1,29 +1,28 @@
 # Last Claude Code Result
 
-Task: Prompt 8 — Market Data Ingestion Scheduler + Freshness Visibility
+Task: Fix daily risk baseline + freshness timezone + CORS docs
 Status: completed
 
 Files changed:
-- `trading/market_data/ingestion_runner.py` (new): `ingest_once()` fetches klines from Binance public API, upserts via `CandlesRepository`, records `data_ingested` event; `ingest_loop()` runs on interval with start/stop/error events; `__main__` CLI with `--once` and `--interval` modes
-- `trading/dashboard_api/routes_market_data.py`: `/market-data/status` now queries DB for latest candle timestamps and returns `status: "fresh"` if any candle is within 2x the timeframe window (15m→30m, 1h→2h, 4h→8h), `"stale"` if candles exist but stale, or `"unknown"` if DB unavailable; resilience fallback returns safe defaults on error
-- `tests/unit/test_market_data_ingestion_runner.py` (new): covers fetch/upsert path, error-continuation per symbol/timeframe, max_cycles stop, start/stop event recording
-- `tests/integration/test_market_data_api.py`: updated assertion to expect `status in (fresh, stale, unknown)` instead of static `"configured"`
+- `trading/runtime/runner.py`: Added `_get_or_create_day_baseline()` that persists the daily equity baseline via a `day_baseline_set` event in the DB. On first cycle of a UTC day a new baseline is created from current equity; on subsequent cycles the stored baseline is reused. `_build_cycle_inputs` now calls this instead of setting `day_start_equity = account_equity`.
+- `trading/dashboard_api/routes_market_data.py`: `_is_fresh()` now normalizes naive datetimes to aware UTC before the subtraction, preventing `TypeError` when SQLite returns naive timestamps.
+- `dashboard/README.md`: Clarified CORS troubleshooting section — both `127.0.0.1:5173` and `localhost:5173` are equally valid; removed contradictory wording.
 
 Verification:
-- `ruff check trading/market_data/ingestion_runner.py trading/dashboard_api/routes_market_data.py tests/unit/test_market_data_ingestion_runner.py tests/integration/test_market_data_api.py` — all checks passed
-- `pytest tests/unit/test_market_data_ingestion_runner.py tests/integration/test_market_data_api.py -q` — 4 + 1 passed
-- `pytest -q` — 185 passed
-- `ruff check .` — all checks passed
-- `git status --short` — only expected files staged
+- `ruff check trading/runtime/runner.py trading/dashboard_api/routes_market_data.py dashboard/README.md` — all passed
+- `cd dashboard && npm run build` — built in 246ms
+- `.venv/bin/pytest -q` — 185 passed
+- `git status --short` — clean (only expected files modified)
 
-Commit: 278f0f1
+Commit:
+- (pending)
 
 Safety:
-- Binance public API only (`/api/v3/klines`) — no private endpoints, no API keys
-- No trading execution changes
-- `/market-data/status` is read-only, resilient to DB errors
+- No live trading changes.
+- No private Binance API changes.
+- No API key handling changes.
+- No bypass of risk controls.
 
 Notes:
-- Public Binance klines endpoint requires no authentication — safe for local paper trading
-- `is_fresh` threshold uses 2x the timeframe to account for slight delays; this can be tuned in future
-- Ingestion runner can run alongside the runtime loop: `python -m trading.market_data.ingestion_runner --interval 300 &`
+- Baseline is keyed by UTC date string in event context; any existing `day_baseline_set` event from a previous day is ignored and a fresh baseline is created.
+- `_is_fresh` handles both naive and aware datetimes by normalising the input to aware UTC before comparison.

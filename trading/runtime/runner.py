@@ -32,6 +32,39 @@ DEFAULT_SLIPPAGE_BPS = Decimal("0")
 DEFAULT_MIN_NOTIONAL = Decimal("10")
 
 
+def _get_or_create_day_baseline(
+    session: Session, now: datetime, current_equity: Decimal
+) -> Decimal:
+    """Return today's opening equity baseline, creating one if it doesn't exist.
+
+    The baseline is stored as a `day_baseline_set` event keyed by UTC date.
+    Within the same UTC day the baseline is reused; a new baseline is created
+    on the first cycle of each new UTC day.
+    """
+    today_utc = now.date()
+    events_repo = EventsRepository(session)
+
+    # Find most recent baseline event
+    for event in events_repo.list_recent(limit=100):
+        if event.event_type != "day_baseline_set":
+            continue
+        # event.context_json has {date: "YYYY-MM-DD", baseline: "..."}
+        ctx = event.context_json or {}
+        if ctx.get("date") == str(today_utc):
+            return Decimal(str(ctx["baseline"]))
+
+    # No baseline for today — create one using current equity
+    baseline = max(current_equity, Decimal("0"))
+    events_repo.record_event(
+        event_type="day_baseline_set",
+        severity="info",
+        component="runner",
+        message=f"Daily equity baseline set: {baseline}",
+        context={"date": str(today_utc), "baseline": str(baseline)},
+    )
+    return baseline
+
+
 def _build_cycle_inputs(
     session: Session,
     symbols: list[str],
@@ -124,7 +157,7 @@ def _build_cycle_inputs(
         else:
             break
 
-    day_start_equity = account_equity  # simplified: same as current until reset
+    day_start_equity = _get_or_create_day_baseline(session, now, account_equity)
 
     inputs: list[CycleInput] = []
     for symbol in symbols:

@@ -39,6 +39,9 @@ def _is_fresh(latest_ts: datetime | None, timeframe: str) -> bool:
     if latest_ts is None:
         return False
     now = datetime.now(UTC)
+    # Normalize to aware UTC in case the DB returned a naive datetime
+    if latest_ts.tzinfo is None:
+        latest_ts = latest_ts.replace(tzinfo=UTC)
     threshold = _STALE_THRESHOLD_SECONDS.get(timeframe, 3600)
     return (now - latest_ts).total_seconds() < threshold
 
