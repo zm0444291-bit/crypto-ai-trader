@@ -70,3 +70,24 @@ def test_execution_records_repository_lists_recent_orders_newest_first():
         orders = repository.list_recent_orders(limit=2)
 
         assert [order.created_at.minute for order in orders] == [5, 0]
+
+
+def test_execution_records_repository_lists_fills_chronologically():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+
+    with session_factory() as session:
+        repository = ExecutionRecordsRepository(session)
+        later_order = make_order().model_copy(
+            update={"created_at": datetime(2026, 4, 19, 1, 5, tzinfo=UTC)}
+        )
+        later_fill = make_fill().model_copy(
+            update={"filled_at": datetime(2026, 4, 19, 1, 5, tzinfo=UTC)}
+        )
+        repository.record_paper_execution(later_order, later_fill)
+        repository.record_paper_execution(make_order(), make_fill())
+
+        fills = repository.list_fills_chronological()
+
+        assert [fill.filled_at.minute for fill in fills] == [0, 5]

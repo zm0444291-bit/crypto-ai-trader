@@ -141,3 +141,7 @@ class ExecutionRecordsRepository:
     def list_recent_orders(self, limit: int = 50) -> list[Order]:
         statement = select(Order).order_by(desc(Order.created_at), desc(Order.id)).limit(limit)
         return list(self.session.scalars(statement))
+
+    def list_fills_chronological(self) -> list[Fill]:
+        statement = select(Fill).order_by(Fill.filled_at, Fill.id)
+        return list(self.session.scalars(statement))
