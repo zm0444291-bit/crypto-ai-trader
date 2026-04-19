@@ -9,7 +9,7 @@ import logging
 import os
 from typing import Any
 
-import requests
+import httpx
 
 from trading.notifications.base import NotificationContext, NotificationLevel
 
@@ -76,7 +76,12 @@ class TelegramNotifier:
                 "text": text,
                 "parse_mode": "Markdown",
             }
-            resp = requests.post(url, data=payload, timeout=10)
-            resp.raise_for_status()
-        except requests.RequestException as exc:
+            with httpx.Client(timeout=(5, 10)) as client:
+                resp = client.post(url, data=payload)
+                resp.raise_for_status()
+        except httpx.TimeoutException as exc:
+            log.warning("Telegram notification timed out: %s", exc)
+        except httpx.HTTPStatusError as exc:
+            log.warning("Telegram notification HTTP error: %s", exc)
+        except httpx.HTTPError as exc:
             log.warning("Telegram notification failed: %s", exc)

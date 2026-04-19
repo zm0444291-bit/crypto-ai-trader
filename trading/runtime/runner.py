@@ -17,6 +17,7 @@ from trading.notifications.log_notifier import LogNotifier
 from trading.portfolio.accounting import PortfolioAccount
 from trading.runtime.paper_cycle import CycleInput, CycleResult, run_paper_cycle
 from trading.storage.db import create_database_engine, create_session_factory, init_db
+from trading.storage.models import Candle
 from trading.storage.repositories import (
     CandlesRepository,
     EventsRepository,
@@ -62,10 +63,20 @@ def _build_cycle_inputs(
 
     # Build market prices from latest candles
     market_prices: dict[str, Decimal] = {}
+    latest_candles: dict[str, Candle] = {}
     for symbol in symbols:
         latest = candles_repo.get_latest(symbol, "15m")
         if latest is not None:
             market_prices[symbol] = Decimal(str(latest.close))
+            latest_candles[symbol] = latest
+
+    # Determine data freshness: fresh if latest 15m candle is within 30 minutes
+    _STALE_THRESHOLD_SECONDS = 1800  # 30 min for 15m candles
+    latest_ts = next((c.open_time for c in latest_candles.values()), None)
+    data_is_fresh = (
+        latest_ts is not None
+        and (now - latest_ts).total_seconds() < _STALE_THRESHOLD_SECONDS
+    )
 
     # Compute snapshot fields
     total_position_value = Decimal("0")
@@ -137,7 +148,7 @@ def _build_cycle_inputs(
                 daily_order_count=daily_order_count,
                 symbol_daily_trade_count=symbol_daily_trade_count_map.get(symbol, 0),
                 consecutive_losses=consecutive_losses,
-                data_is_fresh=True,
+                data_is_fresh=data_is_fresh,
                 kill_switch_enabled=False,
             )
         )
@@ -262,7 +273,12 @@ def run_loop(
 
     Returns:
         The number of cycles that were executed.
+
+    Raises:
+        ValueError: if interval_seconds is less than 1.
     """
+    if interval_seconds < 1:
+        raise ValueError(f"interval_seconds must be >= 1, got {interval_seconds}")
     if symbols is None:
         symbols = SYMBOLS
 

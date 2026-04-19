@@ -1,6 +1,6 @@
 from typing import Any
 
-from sqlalchemy import desc, select
+from sqlalchemy import asc, desc, select
 from sqlalchemy.orm import Session
 
 from trading.execution.paper_executor import PaperFill, PaperOrder
@@ -84,13 +84,13 @@ class CandlesRepository:
         return affected
 
     def list_recent(self, symbol: str, timeframe: str, limit: int = 100) -> list[Candle]:
-        newest_first = (
+        oldest_first = (
             select(Candle)
             .where(Candle.symbol == symbol, Candle.timeframe == timeframe)
-            .order_by(desc(Candle.open_time))
+            .order_by(asc(Candle.open_time))
             .limit(limit)
         )
-        return list(reversed(list(self.session.scalars(newest_first))))
+        return list(self.session.scalars(oldest_first))
 
     def get_latest(self, symbol: str, timeframe: str) -> Candle | None:
         statement = (

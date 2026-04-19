@@ -1,7 +1,7 @@
 """Unit tests for the notification adapters."""
 
 import logging
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from trading.notifications.base import NotificationContext, NotificationLevel
 from trading.notifications.log_notifier import LogNotifier
@@ -87,16 +87,17 @@ class TestTelegramNotifierMissingConfig:
 class TestTelegramNotifierSendFailure:
     """Network errors during send are caught and logged as warnings, not raised."""
 
-    def test_request_exception_caught_and_logged(self, caplog, monkeypatch):
-        import requests
+    def test_connection_error_caught_and_logged(self, caplog, monkeypatch):
+        import httpx
 
         monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:ABC-DEF")
         monkeypatch.setenv("TELEGRAM_CHAT_ID", "987654321")
 
         notifier = TelegramNotifier()
 
-        with patch("requests.post") as mock_post:
-            mock_post.side_effect = requests.ConnectionError("Connection refused")
+        with patch("trading.notifications.telegram_notifier.httpx.Client") as mock_client_cls:
+            mock_client = mock_client_cls.return_value.__enter__.return_value
+            mock_client.post.side_effect = httpx.ConnectError("Connection refused")
 
             with caplog.at_level(logging.WARNING, logger="trading.alerts.telegram"):
                 notifier.notify(
@@ -110,21 +111,21 @@ class TestTelegramNotifierSendFailure:
             assert "Telegram notification failed" in caplog.text
 
     def test_http_error_caught_and_logged(self, caplog, monkeypatch):
-        import requests
+        import httpx
 
         monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:ABC-DEF")
         monkeypatch.setenv("TELEGRAM_CHAT_ID", "987654321")
 
         notifier = TelegramNotifier()
 
-        class FakeResponse:
-            status_code = 429
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "429 Too Many Requests", request=MagicMock(), response=MagicMock()
+        )
 
-            def raise_for_status(self):
-                raise requests.HTTPError("429 Too Many Requests")
-
-        with patch("requests.post") as mock_post:
-            mock_post.return_value = FakeResponse()
+        with patch("trading.notifications.telegram_notifier.httpx.Client") as mock_client_cls:
+            mock_client = mock_client_cls.return_value.__enter__.return_value
+            mock_client.post.return_value = mock_response
 
             with caplog.at_level(logging.WARNING, logger="trading.alerts.telegram"):
                 notifier.notify(
@@ -135,17 +136,19 @@ class TestTelegramNotifierSendFailure:
                 )
 
             assert "429 Too Many Requests" in caplog.text
+            assert "Telegram notification HTTP error" in caplog.text
 
     def test_timeout_caught_and_logged(self, caplog, monkeypatch):
-        import requests
+        import httpx
 
         monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:ABC-DEF")
         monkeypatch.setenv("TELEGRAM_CHAT_ID", "987654321")
 
         notifier = TelegramNotifier()
 
-        with patch("requests.post") as mock_post:
-            mock_post.side_effect = requests.ReadTimeout("Read timed out")
+        with patch("trading.notifications.telegram_notifier.httpx.Client") as mock_client_cls:
+            mock_client = mock_client_cls.return_value.__enter__.return_value
+            mock_client.post.side_effect = httpx.TimeoutException("timed out")
 
             with caplog.at_level(logging.WARNING, logger="trading.alerts.telegram"):
                 notifier.notify(
@@ -155,5 +158,5 @@ class TestTelegramNotifierSendFailure:
                     None,
                 )
 
-            assert "Read timed out" in caplog.text
-            assert "Telegram notification failed" in caplog.text
+            assert "timed out" in caplog.text
+            assert "Telegram notification timed out" in caplog.text
