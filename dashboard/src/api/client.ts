@@ -87,6 +87,31 @@ export interface ControlPlaneResponse {
   transition_guard_to_live_small_auto: string;
 }
 
+export type TradeMode = 'paused' | 'paper_auto' | 'live_shadow' | 'live_small_auto';
+
+export interface ModeChangeRequest {
+  mode: TradeMode;
+  allow_live_unlock: boolean;
+  reason?: string;
+}
+
+export interface ModeChangeResponse {
+  success: boolean;
+  trade_mode: string;
+  reason: string;
+}
+
+export interface LiveLockChangeRequest {
+  enabled: boolean;
+  reason?: string;
+}
+
+export interface LiveLockChangeResponse {
+  success: boolean;
+  lock_enabled: boolean;
+  reason: string;
+}
+
 // ── Fetch helper ──────────────────────────────────────────────────────────────
 
 async function apiFetch<T>(path: string): Promise<T> {
@@ -143,6 +168,41 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
 
 export async function getControlPlane(): Promise<ControlPlaneResponse> {
   return apiFetch<ControlPlaneResponse>('/runtime/control-plane');
+}
+
+export async function setControlPlaneMode(
+  mode: TradeMode,
+  allowLiveUnlock: boolean,
+  reason?: string,
+): Promise<ModeChangeResponse> {
+  const res = await fetch(`${BASE_URL}/runtime/control-plane/mode`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode, allow_live_unlock: allowLiveUnlock, reason }),
+  });
+  const data = await res.json() as ModeChangeResponse | { detail: string };
+  if (!res.ok || (('success' in data) && !data.success)) {
+    const msg = 'detail' in data ? data.detail : (data as ModeChangeResponse).reason;
+    throw new Error(msg);
+  }
+  return data as ModeChangeResponse;
+}
+
+export async function setLiveLock(
+  enabled: boolean,
+  reason?: string,
+): Promise<LiveLockChangeResponse> {
+  const res = await fetch(`${BASE_URL}/runtime/control-plane/live-lock`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled, reason }),
+  });
+  const data = await res.json() as LiveLockChangeResponse | { detail: string };
+  if (!res.ok || (('success' in data) && !data.success)) {
+    const msg = 'detail' in data ? data.detail : (data as LiveLockChangeResponse).reason;
+    throw new Error(msg);
+  }
+  return data as LiveLockChangeResponse;
 }
 
 // ── Analytics types ──────────────────────────────────────────────────────────

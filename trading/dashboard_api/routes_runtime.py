@@ -1,4 +1,4 @@
-"""Dashboard API for runtime loop visibility (read-only)."""
+"""Dashboard API for runtime loop visibility and control (read-only + write control-plane)."""
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from trading.execution.gate import compute_execution_route
+from trading.execution.gate import TRADE_MODES, compute_execution_route
 from trading.runtime.config import AppSettings
 from trading.runtime.mode import validate_mode_transition
 from trading.runtime.state import get_live_trading_lock, get_trade_mode
@@ -14,6 +14,7 @@ from trading.storage.db import create_database_engine, create_session_factory, i
 from trading.storage.repositories import (
     EventsRepository,
     ExecutionRecordsRepository,
+    RuntimeControlRepository,
     ShadowExecutionRepository,
 )
 
@@ -225,6 +226,37 @@ def read_runtime_status() -> RuntimeStatusResponse:
         )
 
 
+class ModeChangeRequest(BaseModel):
+    """Request body for changing the trade mode."""
+
+    mode: TRADE_MODES
+    allow_live_unlock: bool = False
+    reason: str | None = None
+
+
+class ModeChangeResponse(BaseModel):
+    """Structured response for mode change operations."""
+
+    success: bool
+    trade_mode: str
+    reason: str
+
+
+class LiveLockChangeRequest(BaseModel):
+    """Request body for changing the live trading lock state."""
+
+    enabled: bool
+    reason: str | None = None
+
+
+class LiveLockChangeResponse(BaseModel):
+    """Structured response for live-lock change operations."""
+
+    success: bool
+    lock_enabled: bool
+    reason: str
+
+
 class ControlPlaneResponse(BaseModel):
     """Read-only snapshot of the runtime control plane."""
 
@@ -233,6 +265,82 @@ class ControlPlaneResponse(BaseModel):
     lock_reason: str | None
     execution_route: str
     transition_guard_to_live_small_auto: str
+
+
+@router.post("/runtime/control-plane/mode", response_model=ModeChangeResponse)
+def set_mode(body: ModeChangeRequest) -> ModeChangeResponse:
+    """Change the runtime trade mode."""
+    try:
+        settings = AppSettings()
+        engine = create_database_engine(settings.database_url)
+        init_db(engine)
+        session_factory = create_session_factory(engine)
+    except Exception as exc:
+        return ModeChangeResponse(success=False, trade_mode="paper_auto", reason=str(exc))
+
+    try:
+        current_mode = get_trade_mode(session_factory)
+        lock_state = get_live_trading_lock(session_factory)
+
+        if current_mode == body.mode:
+            return ModeChangeResponse(success=True, trade_mode=current_mode, reason="same_mode")
+
+        guard = validate_mode_transition(
+            current_mode,
+            body.mode,
+            lock_enabled=lock_state.enabled,
+            allow_live_unlock=body.allow_live_unlock,
+        )
+
+        if not guard.allowed:
+            return ModeChangeResponse(
+                success=False,
+                trade_mode=current_mode,
+                reason=guard.reason,
+            )
+
+        with session_factory() as session:
+            from trading.storage.repositories import RuntimeControlRepository
+
+            repo = RuntimeControlRepository(session)
+            repo.set_trade_mode(body.mode)
+            new_mode = repo.get_trade_mode()
+
+        return ModeChangeResponse(
+            success=True,
+            trade_mode=new_mode,
+            reason=guard.reason,
+        )
+    except Exception as exc:
+        return ModeChangeResponse(success=False, trade_mode="paper_auto", reason=str(exc))
+
+
+@router.post("/runtime/control-plane/live-lock", response_model=LiveLockChangeResponse)
+def set_live_lock(body: LiveLockChangeRequest) -> LiveLockChangeResponse:
+    """Change the live trading lock state."""
+    try:
+        settings = AppSettings()
+        engine = create_database_engine(settings.database_url)
+        init_db(engine)
+        session_factory = create_session_factory(engine)
+    except Exception as exc:
+        return LiveLockChangeResponse(success=False, lock_enabled=False, reason=str(exc))
+
+    try:
+        with session_factory() as session:
+            from trading.storage.repositories import RuntimeControlRepository
+
+            repo = RuntimeControlRepository(session)
+            repo.set_live_trading_lock(enabled=body.enabled, reason=body.reason)
+            lock = repo.get_live_trading_lock()
+
+        return LiveLockChangeResponse(
+            success=True,
+            lock_enabled=lock.enabled,
+            reason=lock.reason or "ok",
+        )
+    except Exception as exc:
+        return LiveLockChangeResponse(success=False, lock_enabled=False, reason=str(exc))
 
 
 @router.get("/runtime/control-plane", response_model=ControlPlaneResponse)
