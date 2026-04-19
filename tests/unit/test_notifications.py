@@ -1,9 +1,11 @@
 """Unit tests for the notification adapters."""
 
 import logging
+import time
 from unittest.mock import MagicMock, patch
 
 from trading.notifications.base import NotificationContext, NotificationLevel
+from trading.notifications.dedup import AlertDeduplicator
 from trading.notifications.log_notifier import LogNotifier
 from trading.notifications.telegram_notifier import TelegramNotifier
 
@@ -160,3 +162,104 @@ class TestTelegramNotifierSendFailure:
 
             assert "timed out" in caplog.text
             assert "Telegram notification timed out" in caplog.text
+
+
+class TestAlertDeduplicator:
+    """AlertDeduplicator suppresses repeat notifications within a time window."""
+
+    def test_first_notification_is_sent(self):
+        dedup = AlertDeduplicator(window_seconds=300)
+        ok = dedup.should_notify(
+            event_type="cycle_error", component="runner", symbol="BTCUSDT"
+        )
+        assert ok is True
+
+    def test_duplicate_within_window_is_suppressed(self):
+        dedup = AlertDeduplicator(window_seconds=300)
+        ok1 = dedup.should_notify(
+            event_type="cycle_error", component="runner", symbol="BTCUSDT"
+        )
+        ok2 = dedup.should_notify(
+            event_type="cycle_error", component="runner", symbol="BTCUSDT"
+        )
+        assert ok1 is True
+        assert ok2 is False
+
+    def test_different_symbol_is_not_suppressed(self):
+        dedup = AlertDeduplicator(window_seconds=300)
+        ok1 = dedup.should_notify(
+            event_type="cycle_error", component="runner", symbol="BTCUSDT"
+        )
+        ok2 = dedup.should_notify(
+            event_type="cycle_error", component="runner", symbol="ETHUSDT"
+        )
+        assert ok1 is True
+        assert ok2 is True
+
+    def test_different_component_is_not_suppressed(self):
+        dedup = AlertDeduplicator(window_seconds=300)
+        ok1 = dedup.should_notify(
+            event_type="cycle_error", component="runner", symbol="BTCUSDT"
+        )
+        ok2 = dedup.should_notify(
+            event_type="cycle_error", component="supervisor", symbol="BTCUSDT"
+        )
+        assert ok1 is True
+        assert ok2 is True
+
+    def test_different_event_type_is_not_suppressed(self):
+        dedup = AlertDeduplicator(window_seconds=300)
+        ok1 = dedup.should_notify(
+            event_type="cycle_error", component="runner", symbol="BTCUSDT"
+        )
+        ok2 = dedup.should_notify(
+            event_type="supervisor_component_error", component="runner", symbol="BTCUSDT"
+        )
+        assert ok1 is True
+        assert ok2 is True
+
+    def test_none_symbol_is_handled(self):
+        dedup = AlertDeduplicator(window_seconds=300)
+        ok1 = dedup.should_notify(
+            event_type="heartbeat_lost", component="supervisor", symbol=None
+        )
+        ok2 = dedup.should_notify(
+            event_type="heartbeat_lost", component="supervisor", symbol=None
+        )
+        assert ok1 is True
+        assert ok2 is False
+
+    def test_dedup_resets_after_window_expires(self):
+        dedup = AlertDeduplicator(window_seconds=1)
+        ok1 = dedup.should_notify(
+            event_type="cycle_error", component="runner", symbol="BTCUSDT"
+        )
+        ok2 = dedup.should_notify(
+            event_type="cycle_error", component="runner", symbol="BTCUSDT"
+        )
+        assert ok1 is True
+        assert ok2 is False
+        time.sleep(1.1)
+        ok3 = dedup.should_notify(
+            event_type="cycle_error", component="runner", symbol="BTCUSDT"
+        )
+        assert ok3 is True
+
+    def test_reset_for_test_clears_entries(self):
+        dedup = AlertDeduplicator(window_seconds=300)
+        ok1 = dedup.should_notify(
+            event_type="cycle_error", component="runner", symbol="BTCUSDT"
+        )
+        dedup.reset_for_test()
+        ok2 = dedup.should_notify(
+            event_type="cycle_error", component="runner", symbol="BTCUSDT"
+        )
+        assert ok1 is True
+        assert ok2 is True
+
+    def test_short_window(self):
+        dedup = AlertDeduplicator(window_seconds=60)
+        ok = dedup.should_notify(
+            event_type="cycle_error", component="runner", symbol="BTCUSDT"
+        )
+        assert ok is True

@@ -68,6 +68,23 @@ class TestExecutionGate:
         assert result.route == "blocked"
         assert result.reason == "live_small_auto_requires_explicit_unlock"
 
+    def test_live_small_auto_blocked_even_with_risk_approved(self):
+        """live_small_auto must remain blocked regardless of risk_approved flag."""
+        lock = LiveTradingLock(enabled=False)
+        result = self._decide("live_small_auto", lock, risk_approved=True)
+        assert result.allowed is False
+        assert result.route == "blocked"
+        assert result.reason == "live_small_auto_requires_explicit_unlock"
+
+    def test_live_small_auto_blocked_when_lock_enabled(self):
+        """live_small_auto with lock enabled is blocked regardless of risk_approved."""
+        lock = LiveTradingLock(enabled=True, reason="maintenance")
+        # Even with risk_approved=True, lock takes precedence over risk decision
+        result = self._decide("live_small_auto", lock, risk_approved=True)
+        assert result.allowed is False
+        assert result.route == "blocked"
+        assert result.reason == "maintenance"
+
     # ── kill switch override ──────────────────────────────────────────────────
 
     def test_kill_switch_blocks_all_modes(self):
@@ -94,6 +111,17 @@ class TestExecutionGate:
         assert result.allowed is True
         assert result.route == "paper"
         assert result.reason == "paper_auto_approved"
+
+    def test_live_shadow_never_routes_to_paper(self):
+        """live_shadow mode must route to 'shadow', never 'paper' — shadow ≠ paper execution."""
+        lock = LiveTradingLock(enabled=False)
+        for risk_approved in (True, False):
+            result = self._decide("live_shadow", lock, risk_approved=risk_approved)
+            assert result.route == "shadow", (
+                f"live_shadow with risk_approved={risk_approved} must route to shadow, "
+                f"got route={result.route}"
+            )
+            assert result.allowed is True
 
     # ── route returned in decision ───────────────────────────────────────────
 

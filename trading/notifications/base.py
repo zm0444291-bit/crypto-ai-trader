@@ -18,12 +18,20 @@ class NotificationLevel(Enum):
 class NotificationContext(TypedDict, total=False):
     """Extra context attached to a notification."""
 
+    # Identification
+    event_type: str
+    component: str
     symbol: str
-    error: str
+    # State at time of alert
+    mode: str
     risk_state: str
+    guard_reason: str
+    # Metrics
     cycles_last_hour: int
     orders_last_hour: int
     cycle: int
+    # Error detail (used when event_type / component are insufficient alone)
+    error: str
 
 
 class Notifier(Protocol):

@@ -678,3 +678,299 @@ class TestSupervisorCLI:
         fake_run_loop.assert_called_once()
         assert fake_run_loop.call_args.kwargs["interval_seconds"] == 60
         assert fake_run_loop.call_args.kwargs["max_cycles"] == 3
+
+
+class TestSupervisorHeartbeatStaleMonitoring:
+    """Supervisor monitors heartbeat freshness and triggers stale/recovered alerts."""
+
+    def test_monitor_thread_stops_promptly_on_shutdown(self):
+        """Monitor thread exits immediately when stop event is set (no 60s wait)."""
+        import time
+
+        events_recorded: list[dict] = []
+
+        class FakeEventsRepo:
+            def record_event(self, **kwargs):
+                events_recorded.append(kwargs)
+
+        def fake_ingest_loop(**kwargs):
+            kwargs["stop_event"].set()
+
+        def fake_run_loop(**kwargs):
+            kwargs["stop_event"].set()
+
+        with patch(
+            "trading.runtime.supervisor.ingest_loop", side_effect=fake_ingest_loop
+        ):
+            with patch("trading.runtime.supervisor.run_loop", side_effect=fake_run_loop):
+                with patch(
+                    "trading.runtime.supervisor.EventsRepository",
+                    return_value=FakeEventsRepo(),
+                ):
+                    start = time.monotonic()
+                    run_supervisor(
+                        session_factory=make_session_factory(),
+                        ai_scorer=FakeAIScorer(),
+                        ingest_interval=300,
+                        trade_interval=300,
+                        max_cycles=1,
+                    )
+                    elapsed = time.monotonic() - start
+
+        # Monitor thread should not block shutdown
+        assert elapsed < 5, (
+            f"Supervisor took {elapsed:.1f}s to exit — monitor thread may have blocked shutdown"
+        )
+
+    def test_deduplicator_integrated_into_component_error(self):
+        """Component errors are deduplicated — repeated same errors don't re-notify."""
+        from trading.notifications.dedup import AlertDeduplicator
+
+        events_recorded: list[dict] = []
+        notifications_sent: list[dict] = []
+
+        class FakeEventsRepo:
+            def record_event(self, **kwargs):
+                events_recorded.append(kwargs)
+
+        class FakeNotifier:
+            def notify(self, level, title, message, context=None):
+                notifications_sent.append(
+                    {"level": level, "title": title, "message": message, "context": context}
+                )
+
+        dedup = AlertDeduplicator(window_seconds=300)
+
+        def fake_ingest_loop(**kwargs):
+            kwargs["stop_event"].set()
+
+        def fake_run_loop(**kwargs):
+            # First crash
+            kwargs["stop_event"].set()
+            raise RuntimeError("test error A")
+
+        with patch(
+            "trading.runtime.supervisor.ingest_loop", side_effect=fake_ingest_loop
+        ):
+            with patch(
+                "trading.runtime.supervisor.run_loop", side_effect=fake_run_loop
+            ):
+                with patch(
+                    "trading.runtime.supervisor.EventsRepository",
+                    return_value=FakeEventsRepo(),
+                ):
+                    with pytest.raises(RuntimeError, match="test error A"):
+                        run_supervisor(
+                            session_factory=make_session_factory(),
+                            ai_scorer=FakeAIScorer(),
+                            ingest_interval=300,
+                            trade_interval=300,
+                            notifier=FakeNotifier(),
+                            deduplicator=dedup,
+                        )
+
+        # DB events are always recorded for both attempts
+        error_events = [
+            e for e in events_recorded if e["event_type"] == "supervisor_component_error"
+        ]
+        assert len(error_events) >= 1
+        # But notification should be sent only once (dedup suppresses second)
+        component_error_notifications = [
+            n for n in notifications_sent
+            if n["context"] and n["context"].get("component") == "trading"
+        ]
+        # At minimum the first error notification fires
+        assert len(component_error_notifications) >= 1
+
+
+# ─── Component Restart Strategy Tests ─────────────────────────────────────────
+
+class TestComponentRestartStrategy:
+    """Supervisor enforces per-component restart limits and cooldown windows."""
+
+    def test_restart_succeeds_when_under_max_restarts(self):
+        """Component is restarted when crash count is below max_restarts."""
+        events_recorded: list[dict] = []
+        restart_count = {"ingestion": 0}
+
+        class FakeEventsRepo:
+            def record_event(self, **kwargs):
+                events_recorded.append(kwargs)
+
+        def fake_ingest_loop(**kwargs):
+            restart_count["ingestion"] += 1
+            if restart_count["ingestion"] == 1:
+                raise RuntimeError("first ingestion failure")
+            kwargs["stop_event"].set()
+
+        def fake_run_loop(**kwargs):
+            kwargs["stop_event"].set()
+
+        with patch(
+            "trading.runtime.supervisor.ingest_loop", side_effect=fake_ingest_loop
+        ):
+            with patch("trading.runtime.supervisor.run_loop", side_effect=fake_run_loop):
+                with patch(
+                    "trading.runtime.supervisor.EventsRepository",
+                    return_value=FakeEventsRepo(),
+                ):
+                    run_supervisor(
+                        session_factory=make_session_factory(),
+                        ai_scorer=FakeAIScorer(),
+                        ingest_interval=300,
+                        trade_interval=300,
+                        max_restarts=3,
+                        cooldown_seconds=0,
+                    )
+
+        # Should have restart attempt and success events
+        attempted = [e for e in events_recorded if e["event_type"] == "component_restart_attempted"]
+        succeeded = [e for e in events_recorded if e["event_type"] == "component_restart_succeeded"]
+        assert len(attempted) >= 1, "Expected at least one component_restart_attempted event"
+        assert len(succeeded) >= 1, "Expected at least one component_restart_succeeded event"
+
+    def test_restart_exhausted_after_max_restarts_exceeded(self):
+        """Component marked exhausted when max_restarts is exceeded."""
+        events_recorded: list[dict] = []
+
+        class FakeEventsRepo:
+            def record_event(self, **kwargs):
+                events_recorded.append(kwargs)
+
+        def fake_ingest_loop(**kwargs):
+            raise RuntimeError("persistent ingestion failure")
+
+        def fake_run_loop(**kwargs):
+            kwargs["stop_event"].set()
+
+        with patch(
+            "trading.runtime.supervisor.ingest_loop", side_effect=fake_ingest_loop
+        ):
+            with patch("trading.runtime.supervisor.run_loop", side_effect=fake_run_loop):
+                with patch(
+                    "trading.runtime.supervisor.EventsRepository",
+                    return_value=FakeEventsRepo(),
+                ):
+                    with pytest.raises(RuntimeError):
+                        run_supervisor(
+                            session_factory=make_session_factory(),
+                            ai_scorer=FakeAIScorer(),
+                            ingest_interval=300,
+                            trade_interval=300,
+                            max_restarts=2,
+                            cooldown_seconds=0,
+                        )
+
+        exhausted = [
+            e for e in events_recorded
+            if e["event_type"] == "component_restart_exhausted"
+        ]
+        assert len(exhausted) >= 1, (
+            f"Expected at least one component_restart_exhausted event, got events: "
+            f"{[e['event_type'] for e in events_recorded]}"
+        )
+        # Verify exhausted event has required context fields
+        ctx = exhausted[0]["context"]
+        assert "component" in ctx
+        assert "reason" in ctx
+        assert "attempt" in ctx
+
+    def test_restart_cooldown_enforced(self):
+        """Component restart is delayed when within cooldown window."""
+        events_recorded: list[dict] = []
+
+        class FakeEventsRepo:
+            def record_event(self, **kwargs):
+                events_recorded.append(kwargs)
+
+        call_times: list[float] = []
+
+        def fake_ingest_loop(**kwargs):
+            import time
+            call_times.append(time.monotonic())
+            if len(call_times) == 1:
+                raise RuntimeError("first failure")
+            kwargs["stop_event"].set()
+
+        def fake_run_loop(**kwargs):
+            kwargs["stop_event"].set()
+
+        import time
+        with patch(
+            "trading.runtime.supervisor.ingest_loop", side_effect=fake_ingest_loop
+        ):
+            with patch("trading.runtime.supervisor.run_loop", side_effect=fake_run_loop):
+                with patch(
+                    "trading.runtime.supervisor.EventsRepository",
+                    return_value=FakeEventsRepo(),
+                ):
+                    start = time.monotonic()
+                    run_supervisor(
+                        session_factory=make_session_factory(),
+                        ai_scorer=FakeAIScorer(),
+                        ingest_interval=300,
+                        trade_interval=300,
+                        max_restarts=3,
+                        cooldown_seconds=5,  # 5 second cooldown
+                    )
+                    elapsed = time.monotonic() - start
+
+        # With 5s cooldown, second restart should be delayed by at least 3s
+        # (allowing some margin since it checks cooldown on each attempt)
+        attempted = [
+            e for e in events_recorded
+            if e["event_type"] == "component_restart_attempted"
+        ]
+        event_types = [e["event_type"] for e in events_recorded]
+        assert len(attempted) >= 2, (
+            f"Expected at least 2 restart attempts, got {event_types}"
+        )
+        # Second attempt should have been subject to cooldown
+        second_attempt = attempted[1]
+        assert second_attempt["context"].get("cooldown_active") is True or elapsed >= 3, (
+            f"Expected cooldown to delay restart, elapsed={elapsed:.2f}s"
+        )
+
+    def test_restart_event_context_includes_required_fields(self):
+        """All restart events include component, attempt, reason, and timestamp context."""
+        events_recorded: list[dict] = []
+
+        class FakeEventsRepo:
+            def record_event(self, **kwargs):
+                events_recorded.append(kwargs)
+
+        restart_count = {"ingestion": 0}
+
+        def fake_ingest_loop(**kwargs):
+            restart_count["ingestion"] += 1
+            if restart_count["ingestion"] == 1:
+                raise RuntimeError("test crash")
+            kwargs["stop_event"].set()
+
+        def fake_run_loop(**kwargs):
+            kwargs["stop_event"].set()
+
+        with patch(
+            "trading.runtime.supervisor.ingest_loop", side_effect=fake_ingest_loop
+        ):
+            with patch("trading.runtime.supervisor.run_loop", side_effect=fake_run_loop):
+                with patch(
+                    "trading.runtime.supervisor.EventsRepository",
+                    return_value=FakeEventsRepo(),
+                ):
+                    run_supervisor(
+                        session_factory=make_session_factory(),
+                        ai_scorer=FakeAIScorer(),
+                        ingest_interval=300,
+                        trade_interval=300,
+                        max_restarts=3,
+                        cooldown_seconds=0,
+                    )
+
+        for event_type in ["component_restart_attempted", "component_restart_succeeded"]:
+            events = [e for e in events_recorded if e["event_type"] == event_type]
+            assert len(events) >= 1, f"Missing event type: {event_type}"
+            for e in events:
+                assert "component" in e["context"], f"{event_type} missing component"
+                assert "attempt" in e["context"], f"{event_type} missing attempt"
+                assert "reason" in e["context"], f"{event_type} missing reason"

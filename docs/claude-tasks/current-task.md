@@ -1,122 +1,138 @@
-# Claude Code Task: Runtime Ops Hardening (24/7 Local Reliability, Paper-Only)
+# Claude Code Task: Execution Gate + LiveTradingLock (Paper-Only Control Plane)
 
 You are the implementation worker for `/Users/zihanma/Desktop/crypto-ai-trader`.
 
 ## Goal
 
-Harden local runtime operations for long-running paper trading:
+Implement an explicit execution control plane that sits between strategy/risk outputs and executors:
 
-- safer process lifecycle
-- restart visibility and recovery metadata
-- better operational observability
-- one-command local reliability checks
+1. `ExecutionGate` (mode-aware routing decision)
+2. `LiveTradingLock` (hard lock to prevent accidental live routing)
+3. runtime mode state model (`paused`, `paper_auto`, `live_shadow`, `live_small_auto`) with strict transition rules
 
-This is an ops-hardening milestone, not a strategy or live-trading milestone.
+This milestone must remain **paper-only in behavior**. No real order submission.
 
 ## Read First
 
+- `/Users/zihanma/Desktop/crypto-ai-trader/trading/runtime/paper_cycle.py`
 - `/Users/zihanma/Desktop/crypto-ai-trader/trading/runtime/runner.py`
-- `/Users/zihanma/Desktop/crypto-ai-trader/trading/runtime/supervisor.py`
-- `/Users/zihanma/Desktop/crypto-ai-trader/trading/runtime/cli.py`
-- `/Users/zihanma/Desktop/crypto-ai-trader/trading/storage/repositories.py`
+- `/Users/zihanma/Desktop/crypto-ai-trader/trading/execution/paper_executor.py`
+- `/Users/zihanma/Desktop/crypto-ai-trader/trading/risk/pre_trade.py`
+- `/Users/zihanma/Desktop/crypto-ai-trader/trading/main.py`
 - `/Users/zihanma/Desktop/crypto-ai-trader/trading/dashboard_api/routes_runtime.py`
-- `/Users/zihanma/Desktop/crypto-ai-trader/Makefile`
-- `/Users/zihanma/Desktop/crypto-ai-trader/README.md`
+- `/Users/zihanma/Desktop/crypto-ai-trader/trading/storage/models.py`
+- `/Users/zihanma/Desktop/crypto-ai-trader/trading/storage/repositories.py`
+- `/Users/zihanma/Desktop/crypto-ai-trader/docs/superpowers/specs/2026-04-19-crypto-ai-trader-design.md` (Execution Gate + mode sections)
 
 ## Required Scope
 
-### 1) Supervisor heartbeat + liveness metadata
+### 1) New execution control module
 
-Enhance supervisor visibility so operators can tell if runtime is genuinely alive:
+Create `trading/execution/gate.py` with:
 
-- Add periodic supervisor heartbeat event (e.g. every 60s) while loops are running.
-- Heartbeat event should include:
-  - ingest thread alive flag
-  - trading thread alive flag
-  - uptime seconds
-  - active symbols
-- Ensure heartbeat stops cleanly when supervisor exits.
+- `TradeMode` literal/enum:
+  - `paused`
+  - `paper_auto`
+  - `live_shadow`
+  - `live_small_auto`
+- `ExecutionDecision` model:
+  - `allowed: bool`
+  - `route: str` (`paper`, `shadow`, `blocked`)
+  - `reason: str`
+  - `mode: TradeMode`
+- `LiveTradingLock` model:
+  - `enabled: bool` (default false)
+  - optional `reason`
+- `ExecutionGate` class/function:
+  - inputs: current mode, lock state, risk state, kill switch, candidate/order context
+  - outputs: `ExecutionDecision`
 
-### 2) Runtime restart/recovery markers
+Decision policy (strict):
 
-Add minimal, deterministic restart metadata events:
+- `paused` => blocked
+- `paper_auto` => allow `paper` only when risk/kill-switch pass
+- `live_shadow` => allow `shadow` only (no exchange order execution)
+- `live_small_auto` => **blocked unless explicit live unlock flag is true**; for this milestone keep blocked by default
+- any kill switch or emergency/global pause => blocked
 
-- On supervisor start, record a `runtime_boot` event with:
-  - startup timestamp (UTC)
-  - process mode (`supervisor`)
-  - configured intervals
-- On supervisor stop, include total uptime in `supervisor_stopped` context.
-- If a component crashes, include crash marker with component + exception type + message.
+### 2) Mode transition validator
 
-### 3) Runtime status API enhancement (read-only)
+Create `trading/runtime/mode.py` with:
 
-Extend `/runtime/status` response with operational fields (safe defaults when absent):
+- mode transition function `validate_mode_transition(from_mode, to_mode, lock_state, allow_live_unlock=False)`
+- enforce:
+  - no direct `paused -> live_small_auto`
+  - no `paper_auto -> live_small_auto` without passing through `live_shadow`
+  - `live_small_auto` requires explicit unlock flag + lock enabled
 
-- `supervisor_alive` (bool | null)
-- `ingestion_thread_alive` (bool | null)
-- `trading_thread_alive` (bool | null)
-- `uptime_seconds` (int | null)
-- `last_heartbeat_time` (iso | null)
-- `last_component_error` (string | null)
+Return structured result (`allowed`, `reason`) and use it in runtime control paths (read-only visibility is enough if no write API exists yet).
 
-Do not break existing fields consumed by dashboard.
+### 3) Integrate gate into paper cycle path
 
-### 4) Dashboard Overview runtime card enhancement
+Update cycle orchestration so execution decision is explicit:
 
-On Overview page runtime section, display the new operational fields:
+- after risk + position sizing pass, call `ExecutionGate`
+- only execute paper order when decision route is `paper`
+- if blocked, record event with structured context:
+  - mode
+  - decision reason
+  - risk state
+  - lock state
 
-- alive/degraded indicator
-- uptime
-- last heartbeat time
-- last component error
+No behavior regression for current `paper_auto` default.
 
-Maintain existing partial-failure behavior:
+### 4) Runtime status visibility
 
-- per-endpoint failure flags
-- placeholders only for failed panels
-- successful panels keep real data
+Extend runtime status response to include:
 
-### 5) Local ops command set
+- `trade_mode` (current mode, default `paper_auto`)
+- `live_trading_lock_enabled` (bool)
+- `execution_route_effective` (expected route for current mode: `paper`/`shadow`/`blocked`)
+- `mode_transition_guard` (string summary, optional)
 
-Add Makefile helpers for operator workflow:
+Safe defaults required when data missing.
 
-- `make runtime-supervisor` (already exists; keep)
-- `make runtime-health`:
-  - curl health, runtime status, risk status endpoints
-  - concise output
-- `make runtime-tail-events`:
-  - print recent runtime/supervisor/ingestion events (read-only DB query via existing Python modules)
+### 5) Dashboard visibility (read-only)
 
-### 6) Docs update
+Update Overview and/or Settings page to show:
 
-Update README with a short “24/7 Local Ops” section:
+- current mode
+- live lock enabled/disabled
+- effective execution route
+- clear paper-only notice remains visible
 
-- how to start supervisor
-- how to run runtime-health checks
-- how to inspect recent events
-- expected healthy signals (heartbeat freshness, thread alive flags)
+No UI controls that can place orders.
 
 ## Safety Constraints (strict)
 
-- No live trading implementation.
+- No real exchange order execution.
 - No private Binance API integration.
-- No API key handling changes.
-- No order execution endpoint.
-- No bypass of RiskEngine / execution safety boundaries.
+- No API key handling changes for live trading.
+- Do not bypass RiskEngine / kill switch.
+- Do not implement write endpoints that switch to live mode.
+- Preserve existing paper execution behavior.
 
 ## Tests (required)
 
-Add/extend tests to cover:
+Add/extend tests for:
 
-1. supervisor heartbeat event emission
-2. runtime status includes new fields with safe defaults
-3. runtime status reflects heartbeat and component error paths
-4. dashboard build remains passing
+1. gate decisions per mode:
+   - paused blocked
+   - paper_auto routes to paper
+   - live_shadow routes to shadow
+   - live_small_auto blocked by default
+2. lock/risk/kill-switch overrides
+3. mode transition validator rules
+4. paper cycle integration:
+   - gate blocked path does not execute order and records event
+5. runtime status returns new fields with safe defaults
 
-Prefer focused tests in:
+Suggested files:
 
-- `tests/unit/test_runtime_supervisor.py`
-- `tests/integration/test_runtime_status_api.py`
+- `tests/unit/test_execution_gate.py` (new)
+- `tests/unit/test_runtime_mode.py` (new)
+- `tests/unit/test_paper_cycle.py` (extend)
+- `tests/integration/test_runtime_status_api.py` (extend)
 
 ## Verification (required)
 
@@ -138,19 +154,19 @@ If verification passes:
 
 ```bash
 cd /Users/zihanma/Desktop/crypto-ai-trader
-git add trading/runtime trading/dashboard_api dashboard/src Makefile README.md tests docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
-git commit -m "feat: harden local runtime ops observability and health checks"
+git add trading/execution trading/runtime trading/dashboard_api dashboard/src tests docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
+git commit -m "feat: add execution gate and live trading lock control plane"
 ```
 
 ## Completion Report
 
 Write `/Users/zihanma/Desktop/crypto-ai-trader/docs/claude-tasks/last-result.md` with:
 
-- Task
-- Status
-- Files changed
-- Verification summary
-- Commit hash
-- Safety checklist
+- task
+- status
+- files changed
+- verification summary
+- commit hash
+- safety checklist confirmation
 
 Then stop.

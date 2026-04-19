@@ -142,14 +142,17 @@ class TestRuntimeControlRepositoryCrossSession:
         Base.metadata.create_all(engine)
         session_factory = create_session_factory(engine)
 
-        repo = RuntimeControlRepository(session_factory())
-        repo.set_trade_mode("live_shadow")
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            repo.set_trade_mode("live_shadow")
 
         new_session = session_factory()
-        new_repo = RuntimeControlRepository(new_session)
-        mode = new_repo.get_trade_mode()
-        assert mode == "live_shadow"
-        new_session.close()
+        try:
+            new_repo = RuntimeControlRepository(new_session)
+            mode = new_repo.get_trade_mode()
+            assert mode == "live_shadow"
+        finally:
+            new_session.close()
 
     def test_lock_persists_across_sessions(self, tmp_path):
         database_url = f"sqlite:///{tmp_path}/cross_lock.sqlite3"
@@ -157,16 +160,18 @@ class TestRuntimeControlRepositoryCrossSession:
         Base.metadata.create_all(engine)
         session_factory = create_session_factory(engine)
 
-        repo = RuntimeControlRepository(session_factory())
-        repo.set_live_trading_lock(enabled=True, reason="upgrade")
-        repo.session.close()
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            repo.set_live_trading_lock(enabled=True, reason="upgrade")
 
         new_session = session_factory()
-        new_repo = RuntimeControlRepository(new_session)
-        lock = new_repo.get_live_trading_lock()
-        assert lock.enabled is True
-        assert lock.reason == "upgrade"
-        new_session.close()
+        try:
+            new_repo = RuntimeControlRepository(new_session)
+            lock = new_repo.get_live_trading_lock()
+            assert lock.enabled is True
+            assert lock.reason == "upgrade"
+        finally:
+            new_session.close()
 
 
 class TestRuntimeControlRepositorySnapshot:
@@ -202,3 +207,100 @@ class TestRuntimeControlRepositorySnapshot:
             assert snapshot["trade_mode"] == "live_shadow"
             assert snapshot["lock_enabled"] is True
             assert snapshot["lock_reason"] == "maintenance"
+
+    def test_snapshot_execution_route_derived(self, tmp_path):
+        """execution_route is not stored — it is derived by compute_execution_route."""
+        database_url = f"sqlite:///{tmp_path}/snapshot_route.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        session_factory = create_session_factory(engine)
+
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            repo.set_trade_mode("paused")
+
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            snapshot = repo.get_control_plane_snapshot()
+            # execution_route is NOT in snapshot — it is computed at the API layer
+            assert "execution_route" not in snapshot
+
+
+class TestRuntimeControlRepositoryEdgeCases:
+    """Edge cases for repository operations."""
+
+    def test_get_trade_mode_returns_default_on_missing_row(self, tmp_path):
+        """When runtime_control table exists but has no trade_mode row, return default."""
+        database_url = f"sqlite:///{tmp_path}/no_mode_row.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        session_factory = create_session_factory(engine)
+
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            # Table exists but no trade_mode key — should return default
+            mode = repo.get_trade_mode()
+            assert mode == "paper_auto"
+
+    def test_set_trade_mode_to_paused(self, tmp_path):
+        """Setting mode to paused is allowed and persists."""
+        database_url = f"sqlite:///{tmp_path}/mode_paused.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        session_factory = create_session_factory(engine)
+
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            repo.set_trade_mode("paused")
+
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            assert repo.get_trade_mode() == "paused"
+
+    def test_set_live_trading_lock_disabled_with_reason_clears_reason(self, tmp_path):
+        """Re-disabling lock with no reason clears the stored reason."""
+        database_url = f"sqlite:///{tmp_path}/lock_clear.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        session_factory = create_session_factory(engine)
+
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            repo.set_live_trading_lock(enabled=True, reason="maintenance")
+
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            repo.set_live_trading_lock(enabled=False, reason=None)
+
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            lock = repo.get_live_trading_lock()
+            assert lock.enabled is False
+            assert lock.reason is None
+
+    def test_set_live_trading_lock_enabled_idempotent(self, tmp_path):
+        """Re-enabling lock with same reason does not duplicate rows."""
+        database_url = f"sqlite:///{tmp_path}/lock_idempotent.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        session_factory = create_session_factory(engine)
+
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            repo.set_live_trading_lock(enabled=True, reason="maintenance")
+            repo.set_live_trading_lock(enabled=True, reason="maintenance")
+
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            lock = repo.get_live_trading_lock()
+            assert lock.enabled is True
+            assert lock.reason == "maintenance"
+            # Exactly one RuntimeControl row for this key
+            from trading.storage.models import RuntimeControl
+            rc = RuntimeControl
+            count = (
+                session.query(rc)
+                .filter(rc.key == "live_trading_lock")
+                .count()
+            )
+            assert count == 1
