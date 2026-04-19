@@ -1,23 +1,22 @@
 # Last Claude Code Result
 
-Task: Milestone 4.1 Risk Profile Foundation
+Task: Milestone 4.2 Pre-Trade Risk Checks
 Status: completed
 
 Files changed:
-- trading/risk/__init__.py
-- trading/risk/profiles.py
-- trading/risk/state.py
-- tests/unit/test_risk_profiles.py
-- tests/unit/test_risk_state.py
+- trading/risk/pre_trade.py (new)
+- tests/unit/test_pre_trade_risk.py (new)
+- docs/claude-tasks/last-result.md
 
 Verification:
-- .venv/bin/pytest tests/unit/test_risk_profiles.py tests/unit/test_risk_state.py -v: 33 passed
-- .venv/bin/ruff check trading/risk tests/unit/test_risk_profiles.py tests/unit/test_risk_state.py: All checks passed
-- .venv/bin/pytest -q: 99 passed
-- .venv/bin/ruff check .: All checks passed
+- 17 unit tests passed
+- ruff check passed on all new files
+- Full pytest suite (120 tests) passed
+- ruff check passed on entire project
 
 Commit:
-- feat: add risk profile foundation
+- git add trading/risk/pre_trade.py tests/unit/test_pre_trade_risk.py docs/claude-tasks/last-result.md
+- git commit -m "feat: add pre-trade risk checks"
 
 Safety:
 - No order execution added.
@@ -26,6 +25,7 @@ Safety:
 - No live trading added.
 
 Notes:
-- RiskProfile, default_risk_profiles, select_risk_profile, daily_pnl_pct, pct_to_amount implemented in trading/risk/profiles.py
-- RiskState, DailyLossDecision, classify_daily_loss implemented in trading/risk/state.py
-- 33 unit tests covering all required behavior
+- Implemented evaluate_pre_trade_risk function with all required reject rules
+- PortfolioRiskSnapshot and PreTradeRiskDecision models created as specified
+- 11 required test cases + 6 additional boundary tests (17 total)
+- All tests pass, ruff linting clean
