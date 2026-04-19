@@ -56,9 +56,9 @@ export default function Analytics() {
               <div className="metric-label">Daily PnL</div>
               <div className={`metric-value ${(parseFloat(display?.daily_pnl_usdt ?? '0') || 0) >= 0 ? 'positive' : 'negative'}`}>
                 {display ? (
-                  parseFloat(display.daily_pnl_usdt) >= 0
+                  parseFloat(display.daily_pnl_usdt || '0') >= 0
                     ? `+$${fmtNum(display.daily_pnl_usdt)}`
-                    : `-$${fmtNum(Math.abs(parseFloat(display.daily_pnl_usdt)))}`
+                    : `-$${fmtNum(Math.abs(parseFloat(display.daily_pnl_usdt || '0')))}`
                 ) : '—'}
               </div>
             </div>
@@ -112,7 +112,8 @@ export default function Analytics() {
               </div>
               <div className="snapshot-list">
                 {display.equity_snapshots.map((s, i) => {
-                  const pnl = parseFloat(s.equity_usdt) - (display.day_start_equity_usdt ? parseFloat(display.day_start_equity_usdt) : 0);
+                  const baseEquity = parseFloat(display.day_start_equity_usdt || '0');
+                  const pnl = parseFloat(s.equity_usdt) - baseEquity;
                   return (
                     <div key={i} className={`snapshot-row ${pnl >= 0 ? 'positive' : 'negative'}`}>
                       <span className="snapshot-date">

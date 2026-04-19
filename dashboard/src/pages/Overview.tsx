@@ -9,6 +9,7 @@ import {
   type HealthStatus,
   type RiskStatus,
   type PortfolioStatus,
+  type PositionSummary,
   type OrderSummary,
   type EventsSummary,
   type RuntimeStatus,
@@ -31,7 +32,7 @@ const PLACEHOLDER_PORTFOLIO: PortfolioStatus = {
   cash_balance_usdt: '500',
   total_equity_usdt: '500',
   unrealized_pnl_usdt: '0',
-  positions: [],
+  positions: [] as PositionSummary[],
 };
 
 const PLACEHOLDER_EVENTS: EventsSummary[] = [

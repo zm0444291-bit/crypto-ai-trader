@@ -6,7 +6,6 @@ from decimal import Decimal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from trading.portfolio.accounting import PortfolioAccount
 from trading.runtime.config import AppSettings
 from trading.storage.db import create_database_engine, create_session_factory, init_db
 from trading.storage.repositories import ExecutionRecordsRepository
@@ -94,61 +93,75 @@ def read_analytics_summary(
 
     sorted_days = sorted(fills_by_day.keys())
 
-    # Compute equity at each day boundary
+    # Compute equity at each day boundary using direct cash + position tracking
+    # (PortfolioAccount.apply_sell_fill raises NotImplementedError)
     snapshots: list[EquitySnapshot] = []
-    account = PortfolioAccount(cash_balance=initial_cash_usdt)
+    cash = initial_cash_usdt
+    positions: dict[str, dict] = {}  # symbol -> {qty, avg_price, cost_basis}
     for day in sorted_days:
         day_fills = fills_by_day[day]
         for fill in day_fills:
             if fill.side == "BUY":
-                from trading.execution.paper_executor import PaperFill
+                cost = fill.price * fill.qty + fill.fee_usdt
+                cash -= cost
+                if fill.symbol in positions:
+                    pos = positions[fill.symbol]
+                    new_qty = pos["qty"] + fill.qty
+                    pos["avg_price"] = (pos["cost_basis"] + fill.price * fill.qty) / new_qty
+                    pos["cost_basis"] = pos["avg_price"] * new_qty
+                    pos["qty"] = new_qty
+                else:
+                    positions[fill.symbol] = {
+                        "qty": fill.qty,
+                        "avg_price": fill.price,
+                        "cost_basis": fill.price * fill.qty,
+                    }
+            elif fill.side == "SELL":
+                proceeds = fill.price * fill.qty - fill.fee_usdt
+                cash += proceeds
+                if fill.symbol in positions:
+                    positions[fill.symbol]["qty"] -= fill.qty
+                    if positions[fill.symbol]["qty"] <= 0:
+                        del positions[fill.symbol]
+        equity = cash + sum(p["avg_price"] * p["qty"] for p in positions.values())
+        snapshots.append(EquitySnapshot(timestamp=day, equity_usdt=str(_plain_decimal(equity))))
 
-                paper_fill = PaperFill(
-                    symbol=fill.symbol,
-                    side=fill.side,
-                    price=fill.price,
-                    qty=fill.qty,
-                    fee_usdt=fill.fee_usdt,
-                    slippage_bps=fill.slippage_bps,
-                    filled_at=fill.filled_at.replace(tzinfo=UTC)
-                    if fill.filled_at.tzinfo is None
-                    else fill.filled_at,
-                )
-                account.apply_buy_fill(paper_fill)
-        snapshots.append(
-            EquitySnapshot(
-                timestamp=day,
-                equity_usdt=str(_plain_decimal(account.total_equity({}))),
-            )
-        )
+    # Current equity (after all fills)
+    current_equity = cash + sum(p["avg_price"] * p["qty"] for p in positions.values())
 
-    # Current equity
-    current_equity = account.total_equity({})
-
-    # Day-start equity (from first fill of today or initial_cash)
+    # Day-start equity: recompute equity up to yesterday using same direct method
     day_start_equity = initial_cash_usdt
     if day_start.strftime("%Y-%m-%d") in fills_by_day:
-        # Rebuild to day start
-        temp_account = PortfolioAccount(cash_balance=initial_cash_usdt)
+        day_start_cash = initial_cash_usdt
+        day_start_positions: dict[str, dict] = {}
         for fill in all_fills:
             fill_day = fill.filled_at.strftime("%Y-%m-%d")
             if fill_day < day_start.strftime("%Y-%m-%d"):
                 if fill.side == "BUY":
-                    from trading.execution.paper_executor import PaperFill
-
-                    paper_fill = PaperFill(
-                        symbol=fill.symbol,
-                        side=fill.side,
-                        price=fill.price,
-                        qty=fill.qty,
-                        fee_usdt=fill.fee_usdt,
-                        slippage_bps=fill.slippage_bps,
-                        filled_at=fill.filled_at.replace(tzinfo=UTC)
-                        if fill.filled_at.tzinfo is None
-                        else fill.filled_at,
-                    )
-                    temp_account.apply_buy_fill(paper_fill)
-        day_start_equity = temp_account.total_equity({})
+                    cost = fill.price * fill.qty + fill.fee_usdt
+                    day_start_cash -= cost
+                    if fill.symbol in day_start_positions:
+                        pos = day_start_positions[fill.symbol]
+                        new_qty = pos["qty"] + fill.qty
+                        pos["avg_price"] = (pos["cost_basis"] + fill.price * fill.qty) / new_qty
+                        pos["cost_basis"] = pos["avg_price"] * new_qty
+                        pos["qty"] = new_qty
+                    else:
+                        day_start_positions[fill.symbol] = {
+                            "qty": fill.qty,
+                            "avg_price": fill.price,
+                            "cost_basis": fill.price * fill.qty,
+                        }
+                elif fill.side == "SELL":
+                    proceeds = fill.price * fill.qty - fill.fee_usdt
+                    day_start_cash += proceeds
+                    if fill.symbol in day_start_positions:
+                        day_start_positions[fill.symbol]["qty"] -= fill.qty
+                        if day_start_positions[fill.symbol]["qty"] <= 0:
+                            del day_start_positions[fill.symbol]
+        day_start_equity = day_start_cash + sum(
+            p["avg_price"] * p["qty"] for p in day_start_positions.values()
+        )
 
     daily_pnl_usdt = current_equity - day_start_equity
     daily_pnl_pct = (
@@ -157,7 +170,7 @@ def read_analytics_summary(
         else Decimal("0")
     )
 
-    # Win/loss: group fills by symbol, pair BUY then SELL
+    # Win/loss: FIFO matching — each SELL fill is matched against earliest BUY fills
     symbol_fills: dict[str, list[Fill]] = {}
     for fill in all_fills:
         symbol_fills.setdefault(fill.symbol, []).append(fill)
@@ -168,17 +181,22 @@ def read_analytics_summary(
     total_loss = Decimal("0")
 
     for _symbol, fills in symbol_fills.items():
-        if len(fills) < 2:
-            continue
-        # Simple proxy: if avg sell price > avg buy price, it's a winner
         buys = [f for f in fills if f.side == "BUY"]
         sells = [f for f in fills if f.side == "SELL"]
         if not buys or not sells:
             continue
-        avg_buy = sum(f.price * f.qty for f in buys) / sum(f.qty for f in buys)
-        avg_sell = sum(f.price * f.qty for f in sells) / sum(f.qty for f in sells)
-        total_fees = sum(f.fee_usdt for f in buys) + sum(f.fee_usdt for f in sells)
-        pnl = (avg_sell - avg_buy) * sum(f.qty for f in buys) - total_fees
+        total_buy_qty = sum(f.qty for f in buys)
+        total_sell_qty = sum(f.qty for f in sells)
+        # Skip symbols with net short position (can't compute without short tracking)
+        if total_sell_qty > total_buy_qty:
+            continue
+        # FIFO: match each SELL fill against oldest BUYs at their average price
+        avg_buy_price = sum(f.price * f.qty for f in buys) / total_buy_qty
+        sell_proceeds = sum(f.price * f.qty - f.fee_usdt for f in sells)
+        buy_cost = total_sell_qty * avg_buy_price
+        buy_fees = sum(f.fee_usdt for f in buys)
+        sell_fees = sum(f.fee_usdt for f in sells)
+        pnl = sell_proceeds - buy_cost - buy_fees - sell_fees
         if pnl > 0:
             winning_trades += 1
             total_win += pnl
