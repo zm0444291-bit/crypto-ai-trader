@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import asc, desc, select
+from sqlalchemy import asc, desc, func, select
 from sqlalchemy.orm import Session
 
 from trading.execution.gate import TRADE_MODES, LiveTradingLock
@@ -280,7 +280,7 @@ class ShadowExecutionRepository:
 
     def count_last_hour(self, cutoff: datetime) -> int:
         """Return count of shadow executions created after cutoff."""
-        statement = select(ShadowExecution).where(
+        statement = select(func.count()).select_from(ShadowExecution).where(
             ShadowExecution.created_at >= cutoff
         )
-        return len(list(self.session.scalars(statement)))
+        return self.session.scalar(statement) or 0

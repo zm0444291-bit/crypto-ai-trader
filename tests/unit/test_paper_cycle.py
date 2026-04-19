@@ -606,6 +606,12 @@ def test_live_shadow_route_records_shadow_and_does_not_execute_paper_order():
     assert shadow_record.side == "BUY"
     assert isinstance(shadow_record.planned_notional_usdt, Decimal)
     assert shadow_record.planned_notional_usdt > Decimal("0")
+    assert shadow_record.source_cycle_status == "shadow_recorded"
+    # reference_price should match the market price from input_data
+    assert shadow_record.reference_price == Decimal("100000")
+    # slippage=0 so simulated_fill_price == reference_price == market_price
+    assert shadow_record.simulated_fill_price == Decimal("100000")
+    assert shadow_record.simulated_slippage_bps == Decimal("0")
     assert shadow_record.decision_reason == "Looks good."
 
     event_types = [ev.event_type for ev in events_repo.events]

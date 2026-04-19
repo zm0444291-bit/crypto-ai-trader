@@ -401,17 +401,18 @@ def run_paper_cycle(
         simulated_fill_price = market_price * (
             Decimal("1") + executor.slippage_bps / Decimal("10000")
         )
-        shadow_record = ShadowExecutionRepository(session_factory())
-        shadow_record.record_shadow_execution(
-            symbol=candidate.symbol,
-            side=candidate.side,
-            planned_notional_usdt=size_result.notional_usdt,
-            reference_price=market_price,
-            simulated_fill_price=simulated_fill_price,
-            simulated_slippage_bps=executor.slippage_bps,
-            decision_reason=ai_result.explanation if ai_result else "shadow_approved",
-            source_cycle_status="shadow_recorded",
-        )
+        with session_factory() as shadow_session:
+            shadow_repo = ShadowExecutionRepository(shadow_session)
+            shadow_repo.record_shadow_execution(
+                symbol=candidate.symbol,
+                side=candidate.side,
+                planned_notional_usdt=size_result.notional_usdt,
+                reference_price=market_price,
+                simulated_fill_price=simulated_fill_price,
+                simulated_slippage_bps=executor.slippage_bps,
+                decision_reason=ai_result.explanation,
+                source_cycle_status="shadow_recorded",
+            )
         shadow_ev = events_repo.record_event(
             event_type="shadow_execution_recorded",
             severity="info",
