@@ -57,8 +57,8 @@ runtime-supervisor:
 
 runtime-health:
 	@echo "=== Health ===" && curl -s $(API_BASE)/health | $(PYTHON) -m json.tool && \
-	@echo "=== Runtime Status ===" && curl -s $(API_BASE)/runtime/status | $(PYTHON) -m json.tool && \
-	@echo "=== Risk Status ===" && curl -s "$(API_BASE)/risk/status?day_start_equity=500&current_equity=500" | $(PYTHON) -m json.tool
+	echo "=== Runtime Status ===" && curl -s $(API_BASE)/runtime/status | $(PYTHON) -m json.tool && \
+	echo "=== Risk Status ===" && curl -s "$(API_BASE)/risk/status?day_start_equity=500&current_equity=500" | $(PYTHON) -m json.tool
 
 runtime-tail-events:
 	$(PYTHON) -m trading.runtime.event_tail

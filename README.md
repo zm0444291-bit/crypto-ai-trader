@@ -56,7 +56,7 @@ Output is operator-friendly and compact — each check prints a short label and 
 | `/runtime/status` `ingestion_thread_alive` | `true` |
 | `/runtime/status` `trading_thread_alive` | `true` |
 | `/runtime/status` `last_component_error` | `null` — no recent crashes |
-| `/risk/status` `risk_state` | `"green"` with equity unchanged |
+| `/risk/status` `risk_state` | `"normal"` with equity unchanged |
 
 ### Inspect recent events
 
@@ -80,7 +80,7 @@ Press `Ctrl+C` — the supervisor handles shutdown cleanly, sets the stop event,
 | `supervisor_alive: false` | Check that the supervisor process is still running; re-run `make runtime-supervisor` |
 | `ingestion_thread_alive: false` | Run `make db-init` then restart supervisor |
 | `trading_thread_alive: false` | Check Telegram/AI scorer env vars; try `make runtime-once` for a single cycle |
-| `risk_state: red` | Equity has dropped; review `make runtime-tail-events --severity error` |
+| `risk_state: no_new_positions/global_pause/emergency_stop` | Equity or risk constraints breached; review `python -m trading.runtime.event_tail --severity error --limit 50` |
 | `/risk/status` returns 500 | Run `make db-init` to ensure DB schema is current |
 | Dashboard shows stale data | Backend may be down; verify with `curl http://127.0.0.1:8000/health` |
 | Many `cycle_error` events | Run `make runtime-once` manually to see cycle-level error output |
@@ -229,4 +229,4 @@ If you see SQLite errors, ensure the process writing to the DB is not running mu
 
 Check:
 1. Market data: the cycle needs recent 15m candles in the DB. If the DB is brand new, run `make runtime-once` a few times to pull in data.
-2. AI scorer is a stub (`NoOpAIScorer`) that always allows — this is expected for paper trading.
+2. AI scorer backend: default runtime scorer is HTTP-based (`AI_SCORING_BACKEND=http`) and fails closed when `AI_SCORING_URL` is missing/unreachable. This is expected and keeps paper runtime safe.
