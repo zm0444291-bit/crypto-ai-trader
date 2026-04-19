@@ -19,6 +19,18 @@ class TestRuntimeControlRepositoryDefaults:
             mode = repo.get_trade_mode()
             assert mode == "paper_auto"
 
+    def test_get_trade_mode_custom_default_when_empty(self, tmp_path):
+        """Custom default is returned when no row exists in DB."""
+        database_url = f"sqlite:///{tmp_path}/custom_default.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        session_factory = create_session_factory(engine)
+
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            mode = repo.get_trade_mode(default="paused")
+            assert mode == "paused"
+
     def test_get_live_trading_lock_returns_default_when_empty(self, tmp_path):
         database_url = f"sqlite:///{tmp_path}/defaults2.sqlite3"
         engine = create_database_engine(database_url)

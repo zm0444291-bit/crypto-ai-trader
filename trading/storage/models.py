@@ -100,7 +100,7 @@ class RuntimeControl(Base):
     __tablename__ = "runtime_control"
 
     key: Mapped[str] = mapped_column(String(80), primary_key=True)
-    value_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    value_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

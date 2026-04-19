@@ -387,6 +387,44 @@ class TestRuntimeStatusWithControlPlane:
         assert body["live_trading_lock_enabled"] is False
         assert body["execution_route_effective"] == "paper"
 
+    def test_mode_transition_guard_paper_auto(self, tmp_path, monkeypatch):
+        """mode_transition_guard is present and reflects transition to live_small_auto."""
+        database_url = f"sqlite:///{tmp_path}/guard.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        # paper_auto requires going through live_shadow first
+        with create_session_factory(engine)() as session:
+            repo = RuntimeControlRepository(session)
+            repo.set_trade_mode("paper_auto")
+
+        client = TestClient(app)
+        response = client.get("/runtime/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["mode_transition_guard"] is not None
+        assert "live_shadow" in body["mode_transition_guard"]
+
+    def test_execution_route_reflects_trade_mode(self, tmp_path, monkeypatch):
+        """execution_route_effective is correctly derived from trade_mode."""
+        database_url = f"sqlite:///{tmp_path}/route.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+
+        with create_session_factory(engine)() as session:
+            repo = RuntimeControlRepository(session)
+            repo.set_trade_mode("live_shadow")
+
+        client = TestClient(app)
+        response = client.get("/runtime/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["trade_mode"] == "live_shadow"
+        assert body["execution_route_effective"] == "shadow"
+
 
 class TestControlPlaneEndpoint:
     """GET /runtime/control-plane returns read-only snapshot."""

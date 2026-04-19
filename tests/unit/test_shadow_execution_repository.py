@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, update
 from sqlalchemy.orm import sessionmaker
 
 from trading.storage.db import Base
@@ -167,9 +167,10 @@ def test_count_last_hour_excludes_old_records():
             decision_reason="ancient",
         )
         # Manually backdate the created_at
-        session.query(ShadowExecution).filter_by(id=old_record.id).update(
-            {"created_at": now - timedelta(hours=2)}
+        stmt = update(ShadowExecution).where(ShadowExecution.id == old_record.id).values(
+            created_at=now - timedelta(hours=2)
         )
+        session.execute(stmt)
         session.commit()
 
         one_hour_ago = now - timedelta(hours=1)

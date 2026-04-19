@@ -1,3 +1,5 @@
+from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import asc, desc, select
@@ -223,7 +225,7 @@ class RuntimeControlRepository:
 
     # ── snapshot ────────────────────────────────────────────────────────────────
 
-    def get_control_plane_snapshot(self) -> dict:
+    def get_control_plane_snapshot(self) -> dict[str, Any]:
         """Return a full snapshot of the control plane for read-only queries."""
         mode = self.get_trade_mode()
         lock = self.get_live_trading_lock()
