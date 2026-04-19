@@ -1,84 +1,58 @@
-# Task: Fix Release Gate Recursive Crash
+# Task: E — Align Docs with Paper-Safe Implementation
 
 ## Goal
 
-Fix the recursive subprocess crash when `tests/integration/test_release_gate_paper.py` calls `scripts/release_gate_paper.sh`, which internally runs pytest, causing process explosion.
+Align README.md, docs/runbook-paper-ops.md, and dashboard/README.md with current code implementation (fields/paths/commands must be consistent).
 
 ## Status
 
 ✅ Complete
 
-## Root Cause
-
-1. `tests/integration/test_release_gate_paper.py` called `scripts/release_gate_paper.sh` via `subprocess.run()` without setting `RELEASE_GATE_TEST_MODE=1`
-2. The script ran real `pytest` which invoked the tests again → infinite recursion
-3. Additionally, bash string comparison in the script compared Python's `True` output (`"True"`) against `"true"` (lowercase) which never matched
-
 ## Changes
 
-### 1. `scripts/release_gate_paper.sh`
+### 1. README.md
 
-- Added `RELEASE_GATE_TEST_MODE=1` detection (`_is_test_mode()`) to skip real command execution in test contexts
-- Fixed Python one-liners for `live_trading_enabled` checks to normalize `True`/`False` to lowercase strings (`str(v).lower()`)
-- Fixed `binance.live_trading_enabled` YAML path: was `cfg['binance']` but should be `cfg['exchanges']['binance']`
-- Changed gate.py check (4d) from `warn` to `fail` so missing blocks properly increment error count
+- **`make runtime-loop` → `make runtime-supervisor`**: The Makefile defines `runtime-supervisor` (with `--supervisor` flag) as the long-running loop target. `runtime-loop` does not exist. Fixed all references (3 occurrences) to use `runtime-supervisor`.
+- **Health check table**: Removed `last_component_error` (not in `/runtime/status` API) and `risk_state` (belongs to `/risk/status`, not `/runtime/status`). Replaced with correct `/runtime/status` fields: `heartbeat_stale_alerting`, `restart_exhausted_ingestion`, `restart_exhausted_trading`.
+- **Symptom table**: Replaced `risk_state: no_new_positions/global_pause/emergency_stop` with the actual runtime status field `restart_exhausted_ingestion` or `restart_exhausted_trading` is `true`.
 
-### 2. `tests/unit/test_release_gate_script.py`
+### 2. docs/runbook-paper-ops.md
 
-- Added `RELEASE_GATE_TEST_MODE=1` to all test environments to prevent recursion
-- All config patching uses `finally` block to restore original state
-- Config files are patched in-place then restored after each test
-- Removed `TestCommandFailure` class — command failure tests are incompatible with test mode (script only checks path existence, not execution success in test mode)
+- **DB init command (section 1.3)**: Fixed wrong import `create_engine` → `create_database_engine` (which is the correct wrapper in `trading.storage.db`). Also removed unused `RuntimeControlRepository` import. Command now uses `AppSettings().database_url` for consistency.
+- **Section 3.4 (GLOBAL_PAUSE)**: Fixed field reference `execution_route` → `execution_route_effective` to match `/runtime/status` API response field name. Also fixed symptom description to use correct field `mode_transition_guard` from `/runtime/status` (not `/runtime/control-plane`).
+- **Appendix API reference**: Removed `last_component_error` from `/runtime/status` field listing (it's not returned by the API). Added note explaining where to find it: `python -m trading.runtime.event_tail --event-type supervisor_component_error --limit 5`.
 
-### 3. `tests/integration/test_release_gate_paper.py`
+### 3. dashboard/README.md
 
-- Added `RELEASE_GATE_TEST_MODE=1` to all test environments
-- Fixed YAML structure for exchange config: `cfg["binance"]` → `cfg["exchanges"]["binance"]`
-- All config patching uses `finally` block to restore original state
-- Removed command failure tests (ruff/pytest/npm failures) — incompatible with test mode
-
-### 4. `config/app.yaml`
-
-- Fixed `live_trading_enabled: true` → `live_trading_enabled: false` (was incorrect for paper-safe mode)
+- No changes needed — already aligned with current implementation.
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `scripts/release_gate_paper.sh` | Test mode support, Python bool normalization, YAML path fix, gate check error fix |
-| `tests/unit/test_release_gate_script.py` | Full rewrite — test mode env, config patching with restore |
-| `tests/integration/test_release_gate_paper.py` | Full rewrite — test mode env, YAML path fix, config patching with restore |
-| `config/app.yaml` | Fixed `live_trading_enabled: true` → `false` |
+| `README.md` | Fixed `make runtime-loop` → `make runtime-supervisor` (3×); fixed health table fields |
+| `docs/runbook-paper-ops.md` | Fixed DB init command import; fixed section 3.4 field names; fixed API reference appendix |
+| `docs/claude-tasks/last-result.md` | This report |
 
 ## Verification
 
 ```bash
-# 1. Ruff check on test files
-.venv/bin/ruff check tests/unit/test_release_gate_script.py tests/integration/test_release_gate_paper.py
+# 1. Ruff lint
+cd /Users/zihanma/Desktop/crypto-ai-trader
+.venv/bin/ruff check .
 # Result: All checks passed!
 
-# 2. Pytest on modified tests
-.venv/bin/pytest -q tests/unit/test_release_gate_script.py tests/integration/test_release_gate_paper.py
-# Result: 11 passed in 0.96s
+# 2. Pytest
+.venv/bin/pytest -q
+# Result: 349 passed in 11.78s
 
-# 3. Full release gate (background - long-running)
-bash scripts/release_gate_paper.sh
-# Result: STOPPED — too long for report phase
+# 3. Dashboard build
+cd dashboard && npm run build && cd ..
+# Result: ✓ built in 355ms
 ```
 
 ## Residual Risks
 
-1. **Command failure coverage gap**: Test mode skips real command execution, so ruff/pytest/npm failure paths cannot be tested via subprocess. These are verified manually or via the script's own exit codes when run outside test mode.
-2. **Config file race condition**: Tests patch config files in-place. If a test crashes before restore, config could be left modified. The `finally` block mitigates this.
-3. **exchanges.yaml `MISSING` detection**: The script's output shows `exchanges.yaml binance.live_trading_enabled is 'MISSING'` which suggests the yaml.safe_load may not be finding the right key path. This should be verified manually.
-
-## Commit
-
-```bash
-git add scripts/release_gate_paper.sh \
-       tests/unit/test_release_gate_script.py \
-       tests/integration/test_release_gate_paper.py \
-       config/app.yaml \
-       docs/claude-tasks/last-result.md
-git commit -m "fix: prevent release gate recursive crash and config comparison bugs"
-```
+1. **API field documentation drift**: As the codebase evolves, `/runtime/status` and `/runtime/control-plane` fields may change. The docs are aligned as of this fix but will drift again without a sync mechanism.
+2. **Dashboard README is minimal**: The dashboard README is short and mostly accurate. No changes were needed, but it lacks detail on the control panel features added in previous tasks.
+3. **`runtime-loop` Makefile target**: The Makefile only has `runtime-supervisor`, not `runtime-loop`. If a future Makefile change adds `runtime-loop`, the README would need to reflect the distinction.
