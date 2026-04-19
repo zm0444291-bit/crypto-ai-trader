@@ -1,4 +1,4 @@
-# Claude Code Task: Milestone 4.2 Pre-Trade Risk Checks
+# Claude Code Task: Milestone 4.3 Position Sizing
 
 You are the implementation worker for `crypto-ai-trader`.
 
@@ -6,13 +6,13 @@ Read:
 
 - `docs/claude-collaboration.md`
 - `trading/risk/profiles.py`
-- `trading/risk/state.py`
+- `trading/risk/pre_trade.py`
 - `trading/strategies/base.py`
 - Existing tests under `tests/unit/`
 
 ## Goal
 
-Implement deterministic pre-trade risk checks for a `TradeCandidate`. This task must only approve or reject a candidate. It must not size positions, create orders, simulate fills, call Binance, or touch live trading.
+Implement deterministic position sizing for an approved `TradeCandidate`. This task must calculate a notional USDT order size only. It must not create orders, simulate fills, call exchanges, read account balances from Binance, or touch live trading.
 
 ## Safety Rules
 
@@ -28,109 +28,71 @@ Do not implement:
 
 ## Files To Create
 
-- `trading/risk/pre_trade.py`
-- `tests/unit/test_pre_trade_risk.py`
+- `trading/risk/position_sizing.py`
+- `tests/unit/test_position_sizing.py`
 - `docs/claude-tasks/last-result.md`
 
 ## Required Models
 
-Create in `trading/risk/pre_trade.py`:
+Create in `trading/risk/position_sizing.py`:
 
 ```python
 from decimal import Decimal
 from pydantic import BaseModel
 
-class PortfolioRiskSnapshot(BaseModel):
-    account_equity: Decimal
-    day_start_equity: Decimal
-    total_position_pct: Decimal
-    symbol_position_pct: Decimal
-    open_positions: int
-    daily_order_count: int
-    symbol_daily_trade_count: int
-    consecutive_losses: int
-    data_is_fresh: bool
-    kill_switch_enabled: bool
-
-class PreTradeRiskDecision(BaseModel):
+class PositionSizeResult(BaseModel):
     approved: bool
-    risk_state: RiskState
-    size_multiplier: Decimal
+    notional_usdt: Decimal
+    max_loss_usdt: Decimal
     reject_reasons: list[str]
 ```
 
 Create:
 
 ```python
-def evaluate_pre_trade_risk(
+def calculate_position_size(
     candidate: TradeCandidate,
-    snapshot: PortfolioRiskSnapshot,
+    pre_trade_decision: PreTradeRiskDecision,
     profile: RiskProfile,
-    max_daily_orders: int = 15,
-    max_symbol_daily_trades: int = 4,
-    max_consecutive_losses: int = 4,
-) -> PreTradeRiskDecision: ...
+    account_equity: Decimal,
+    min_notional_usdt: Decimal = Decimal("10"),
+) -> PositionSizeResult: ...
 ```
 
 ## Required Behavior
 
-Reject when:
+- If `pre_trade_decision.approved` is false, return approved false, notional 0, max_loss 0, and include `pre_trade_rejected`.
+- Risk per trade is `account_equity * profile.max_trade_risk_pct / 100`.
+- Hard cap is `account_equity * profile.max_trade_risk_hard_cap_pct / 100`; max loss must not exceed hard cap.
+- Stop distance is `entry_reference - stop_reference`.
+- Reject if stop distance is <= 0 with `invalid_stop_distance`.
+- Raw notional is `max_loss_usdt / (stop_distance / entry_reference)`.
+- Apply `pre_trade_decision.size_multiplier`.
+- Cap notional at `account_equity * profile.max_symbol_position_pct / 100`.
+- Reject if final notional is below `min_notional_usdt` with `below_min_notional`.
+- Return approved true with final notional and max_loss_usdt when all checks pass.
 
-- kill switch is enabled
-- data is not fresh
-- daily loss state is `no_new_positions` or `global_pause`
-- total position pct is greater than or equal to profile max total position pct
-- symbol position pct is greater than or equal to profile max symbol position pct
-- daily order count is greater than or equal to max daily orders
-- symbol daily trade count is greater than or equal to max symbol daily trades
-- consecutive losses is greater than or equal to max consecutive losses
-
-Approve when none of the reject rules apply.
-
-Risk state:
-
-- Use `classify_daily_loss`.
-- If approved and daily loss state is `degraded`, return `risk_state="degraded"` and `size_multiplier=Decimal("0.5")`.
-- If approved and daily loss state is `normal`, return `risk_state="normal"` and `size_multiplier=Decimal("1")`.
-- If rejected by kill switch, return `risk_state="emergency_stop"`.
-- If rejected by daily loss no-new/global, return that daily loss risk state.
-- Otherwise rejected risk state can be `no_new_positions`.
-
-Reject reason strings must be stable snake_case codes, such as:
-
-- `kill_switch_enabled`
-- `stale_market_data`
-- `daily_loss_no_new_positions`
-- `daily_loss_global_pause`
-- `max_total_position_reached`
-- `max_symbol_position_reached`
-- `max_daily_orders_reached`
-- `max_symbol_daily_trades_reached`
-- `max_consecutive_losses_reached`
+Use `Decimal` throughout.
 
 ## Required Tests
 
 Write unit tests for:
 
-- approves normal candidate with size multiplier 1
-- degraded daily loss approves with size multiplier 0.5
-- kill switch rejects with emergency_stop
-- stale data rejects
-- no_new_positions daily loss rejects
-- global_pause daily loss rejects
-- max total position rejects
-- max symbol position rejects
-- max daily orders rejects
-- max symbol daily trades rejects
-- max consecutive losses rejects
+- returns notional for normal approved trade
+- applies degraded size multiplier
+- caps by max symbol position percentage
+- rejects pre-trade rejected decision
+- rejects invalid stop distance
+- rejects below min notional
+- hard cap prevents max loss exceeding hard cap
 
 ## Verification
 
 Run:
 
 ```bash
-.venv/bin/pytest tests/unit/test_pre_trade_risk.py -v
-.venv/bin/ruff check trading/risk tests/unit/test_pre_trade_risk.py
+.venv/bin/pytest tests/unit/test_position_sizing.py -v
+.venv/bin/ruff check trading/risk tests/unit/test_position_sizing.py
 .venv/bin/pytest -q
 .venv/bin/ruff check .
 git status --short
@@ -141,8 +103,8 @@ git status --short
 If verification passes:
 
 ```bash
-git add trading/risk/pre_trade.py tests/unit/test_pre_trade_risk.py docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
-git commit -m "feat: add pre-trade risk checks"
+git add trading/risk/position_sizing.py tests/unit/test_position_sizing.py docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
+git commit -m "feat: add deterministic position sizing"
 ```
 
 ## Completion Report
@@ -152,7 +114,7 @@ Write `docs/claude-tasks/last-result.md` with:
 ```text
 # Last Claude Code Result
 
-Task: Milestone 4.2 Pre-Trade Risk Checks
+Task: Milestone 4.3 Position Sizing
 Status: completed | failed
 
 Files changed:
