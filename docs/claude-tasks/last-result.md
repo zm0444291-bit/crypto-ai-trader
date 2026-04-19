@@ -1,25 +1,24 @@
 # Last Claude Code Result
 
-Task: Dashboard Polling + Runtime Panel
+Task: Local startup runbook — Makefile + docs
 Status: completed
 
 Files changed:
-- dashboard/src/App.tsx (add polling, RuntimeSection, lastUpdated state)
-- dashboard/src/api/client.ts (add RuntimeStatus interface, getRuntimeStatus())
-- dashboard/src/styles.css (add .runtime-grid, .last-updated, clean up duplicate .offline-notice)
-- docs/claude-tasks/last-result.md (updated)
+- Makefile (created) — `make install`, `make db-init`, `make backend`, `make dashboard`, `make runtime-once`, `make runtime-loop`, `make check/lint/test`
+- README.md (updated) — added "Local Paper Trading Quickstart" section with environment setup, DB init behavior, start order, health checks, known safe defaults, and troubleshooting
+- dashboard/README.md (updated) — added troubleshooting section for CORS/port/alerts
 
 Verification:
-- `cd dashboard && npm run build` — success
+- `make db-init` — "Database initialized."
+- `import trading.main` — OK (backend module loads)
+- `python -m trading.runtime.cli --once` — cycle runs: status=no_signal, candidate_present=False, order_executed=False
 - `ruff check .` — all checks passed
-- `pytest -q` — 165 passed (full suite)
-- `git status --short` — modified files only
+- `pytest -q` — 174 passed (full suite)
+- `git status --short` — only expected files staged
 
-Key features:
-- fetchAll() function fetches all 6 panels; called on mount and every 10 seconds via setInterval
-- lastUpdated state tracks most recent successful poll timestamp
-- RuntimeSection renders last_cycle_status, cycles_last_hour, orders_last_hour, last_error_message
-- Per-panel failures tracked in ApiFailures type (added `runtime: boolean`)
-- Partial-failure preserved: each panel independently shows placeholder on failure, real data on success
-- Safety banner unchanged
-- last-updated stamp appears in Runtime section header only when data has been fetched
+Key decisions:
+- Used Makefile (not scripts/) as the single entry point; all targets use .venv/bin/ paths for cross-machine safety
+- DB is SQLite at `data/crypto_trader.db`, auto-created on first db-init
+- Runtime loop is optional — backend + dashboard can run without it; dashboard shows empty panels until at least one cycle runs
+- Telegram is fully optional; missing env vars produce a debug log and fall back silently
+- Did not add cloud deployment, live trading, or Docker instructions
