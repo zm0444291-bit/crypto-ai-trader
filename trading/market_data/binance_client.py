@@ -6,6 +6,9 @@ import httpx
 
 from trading.market_data.schemas import CandleData
 
+# Default timeout for Binance API requests: (connect, read) in seconds
+_DEFAULT_TIMEOUT = (5.0, 10.0)
+
 
 class BinanceKlineClient:
     def __init__(
@@ -21,7 +24,7 @@ class BinanceKlineClient:
         if self._client is not None:
             client = self._client
         else:
-            client = httpx.Client(base_url=self.base_url)
+            client = httpx.Client(base_url=self.base_url, timeout=_DEFAULT_TIMEOUT)
         try:
             response = client.get(
                 "/api/v3/klines",

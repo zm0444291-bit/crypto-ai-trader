@@ -8,7 +8,6 @@ Usage:
 from __future__ import annotations
 
 import logging
-import time
 from threading import Event as ThreadingEvent
 from typing import TYPE_CHECKING
 
@@ -135,9 +134,9 @@ def ingest_loop(
                 logger.exception("Ingestion cycle %d raised an exception", cycles_run + 1)
 
             cycles_run += 1
-            if stop.is_set():
-                break
-            time.sleep(interval_seconds)
+            # stop.wait() returns immediately when stop is set, eliminating the
+            # race window that existed between time.sleep() and the next check.
+            stop.wait(timeout=interval_seconds)
 
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received, stopping ingestion loop")
