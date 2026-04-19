@@ -44,11 +44,9 @@ def _get_or_create_day_baseline(
     today_utc = now.date()
     events_repo = EventsRepository(session)
 
-    # Find most recent baseline event
-    for event in events_repo.list_recent(limit=100):
-        if event.event_type != "day_baseline_set":
-            continue
-        # event.context_json has {date: "YYYY-MM-DD", baseline: "..."}
+    # Get the single most recent baseline event — no limit dependency
+    event = events_repo.get_latest_event_by_type("day_baseline_set")
+    if event is not None:
         ctx = event.context_json or {}
         if ctx.get("date") == str(today_utc):
             return Decimal(str(ctx["baseline"]))
@@ -106,10 +104,13 @@ def _build_cycle_inputs(
     # Determine data freshness: fresh if latest 15m candle is within 30 minutes
     _STALE_THRESHOLD_SECONDS = 1800  # 30 min for 15m candles
     latest_ts = next((c.open_time for c in latest_candles.values()), None)
-    data_is_fresh = (
-        latest_ts is not None
-        and (now - latest_ts).total_seconds() < _STALE_THRESHOLD_SECONDS
-    )
+    if latest_ts is not None:
+        # Normalize naive datetime to aware UTC before subtraction
+        if latest_ts.tzinfo is None:
+            latest_ts = latest_ts.replace(tzinfo=UTC)
+        data_is_fresh = (now - latest_ts).total_seconds() < _STALE_THRESHOLD_SECONDS
+    else:
+        data_is_fresh = False
 
     # Compute snapshot fields
     total_position_value = Decimal("0")

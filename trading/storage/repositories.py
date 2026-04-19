@@ -38,6 +38,16 @@ class EventsRepository:
         statement = select(Event).order_by(desc(Event.id)).limit(limit)
         return list(self.session.scalars(statement))
 
+    def get_latest_event_by_type(self, event_type: str) -> Event | None:
+        """Return the most recent event of the given type, or None."""
+        statement = (
+            select(Event)
+            .where(Event.event_type == event_type)
+            .order_by(desc(Event.id))
+            .limit(1)
+        )
+        return self.session.scalar(statement)
+
 
 class CandlesRepository:
     """Persistence helper for OHLCV candles."""

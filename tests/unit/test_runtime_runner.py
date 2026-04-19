@@ -329,3 +329,254 @@ class TestRunLoop:
 
         assert cycles == 2
         assert len(run_once_calls) == 2
+
+
+class TestDayBaseline:
+    """Regression tests for daily equity baseline persistence."""
+
+    def test_same_day_baseline_reuse(self):
+        """Second call on the same UTC day returns the stored baseline, not current equity."""
+        from datetime import UTC, date, datetime
+        from decimal import Decimal
+        from unittest.mock import MagicMock, patch
+
+        from trading.runtime.runner import _get_or_create_day_baseline
+
+        today_str = str(date.today())
+        now = datetime.now(UTC)
+
+        stored_event = MagicMock()
+        stored_event.event_type = "day_baseline_set"
+        stored_event.context_json = {"date": today_str, "baseline": "500.00"}
+
+        fake_events_repo = MagicMock()
+        fake_events_repo.get_latest_event_by_type.return_value = stored_event
+
+        fake_session = MagicMock()
+
+        with patch(
+            "trading.runtime.runner.EventsRepository",
+            return_value=fake_events_repo,
+        ):
+            result1 = _get_or_create_day_baseline(fake_session, now, Decimal("500"))
+            result2 = _get_or_create_day_baseline(fake_session, now, Decimal("480"))
+
+        # Same UTC day → baseline from stored event, not current equity
+        assert result1 == result2 == Decimal("500.00")
+        # No new event should have been recorded (existing baseline was found)
+        assert fake_events_repo.record_event.call_count == 0
+
+    def test_next_day_baseline_rotates(self):
+        """When the most recent baseline is from a prior UTC day, a new one is created."""
+        from datetime import UTC, date, datetime, timedelta
+        from decimal import Decimal
+        from unittest.mock import MagicMock, patch
+
+        from trading.runtime.runner import _get_or_create_day_baseline
+
+        yesterday = str(date.today() - timedelta(days=1))
+        today_str = str(date.today())
+        now = datetime.now(UTC)
+
+        old_event = MagicMock()
+        old_event.event_type = "day_baseline_set"
+        old_event.context_json = {"date": yesterday, "baseline": "400.00"}
+
+        fake_events_repo = MagicMock()
+        fake_events_repo.get_latest_event_by_type.return_value = old_event
+
+        fake_session = MagicMock()
+
+        with patch(
+            "trading.runtime.runner.EventsRepository",
+            return_value=fake_events_repo,
+        ):
+            baseline = _get_or_create_day_baseline(fake_session, now, Decimal("520"))
+
+        # Yesterday's baseline must NOT be reused → new baseline from current equity
+        assert baseline == Decimal("520")
+        fake_events_repo.record_event.assert_called_once()
+        call_args = fake_events_repo.record_event.call_args
+        assert call_args.kwargs["event_type"] == "day_baseline_set"
+        assert call_args.kwargs["context"]["date"] == today_str
+
+    def test_no_prior_baseline_creates_new(self):
+        """When no prior baseline event exists at all, create one from current equity."""
+        from decimal import Decimal
+        from unittest.mock import MagicMock, patch
+
+        from trading.runtime.runner import _get_or_create_day_baseline
+
+        fake_events_repo = MagicMock()
+        fake_events_repo.get_latest_event_by_type.return_value = None
+
+        fake_session = MagicMock()
+
+        with patch(
+            "trading.runtime.runner.EventsRepository",
+            return_value=fake_events_repo,
+        ):
+            baseline = _get_or_create_day_baseline(fake_session, MagicMock(), Decimal("750"))
+
+        assert baseline == Decimal("750")
+        fake_events_repo.record_event.assert_called_once()
+        call_args = fake_events_repo.record_event.call_args
+        assert call_args.kwargs["event_type"] == "day_baseline_set"
+
+
+class TestDataFreshness:
+    """Regression tests for data_is_fresh calculation with naive and aware timestamps."""
+
+    def _make_fake_portfolio(self) -> MagicMock:
+        """Return a PortfolioAccount mock that returns safe decimal values."""
+        portfolio = MagicMock()
+        portfolio.total_equity.return_value = Decimal("500")
+        portfolio.positions = {}
+        return portfolio
+
+    def test_data_is_fresh_naive_timestamp(self):
+        """data_is_fresh handles naive datetime without raising TypeError."""
+        from datetime import UTC, datetime
+        from decimal import Decimal
+        from unittest.mock import MagicMock, patch
+
+        from trading.runtime.runner import _build_cycle_inputs
+
+        # Simulate a candle with naive datetime (SQLite default)
+        naive_ts = datetime(2020, 1, 1, 12, 0, 0)  # no tzinfo
+
+        candle_mock = MagicMock()
+        candle_mock.open_time = naive_ts
+        candle_mock.close = Decimal("50000")
+
+        candles_repo = MagicMock()
+        candles_repo.get_latest.return_value = candle_mock
+
+        exec_repo = MagicMock()
+        exec_repo.list_fills_chronological.return_value = []
+        exec_repo.list_recent_orders.return_value = []
+
+        with patch("trading.runtime.runner.CandlesRepository", return_value=candles_repo):
+            with patch("trading.runtime.runner.ExecutionRecordsRepository", return_value=exec_repo):
+                with patch(
+                    "trading.runtime.runner.PortfolioAccount",
+                    return_value=self._make_fake_portfolio(),
+                ):
+                    # Must not raise TypeError even though naive_ts has no tzinfo
+                    inputs = _build_cycle_inputs(
+                        session=MagicMock(),
+                        symbols=["BTCUSDT"],
+                        now=datetime.now(UTC),
+                        initial_cash_usdt=Decimal("500"),
+                    )
+
+        assert len(inputs) == 1
+        # Naive timestamp far in the past → not fresh
+        assert inputs[0].data_is_fresh is False
+
+    def test_data_is_fresh_aware_timestamp_fresh(self):
+        """data_is_fresh is True when aware timestamp is within the stale threshold."""
+        from datetime import UTC, datetime, timedelta
+        from decimal import Decimal
+        from unittest.mock import MagicMock, patch
+
+        from trading.runtime.runner import _build_cycle_inputs
+
+        # Recent aware UTC timestamp (within 30 min)
+        recent_aware = datetime.now(UTC) - timedelta(minutes=5)
+
+        candle_mock = MagicMock()
+        candle_mock.open_time = recent_aware
+        candle_mock.close = Decimal("50000")
+
+        candles_repo = MagicMock()
+        candles_repo.get_latest.return_value = candle_mock
+
+        exec_repo = MagicMock()
+        exec_repo.list_fills_chronological.return_value = []
+        exec_repo.list_recent_orders.return_value = []
+
+        with patch("trading.runtime.runner.CandlesRepository", return_value=candles_repo):
+            with patch("trading.runtime.runner.ExecutionRecordsRepository", return_value=exec_repo):
+                with patch(
+                    "trading.runtime.runner.PortfolioAccount",
+                    return_value=self._make_fake_portfolio(),
+                ):
+                    inputs = _build_cycle_inputs(
+                        session=MagicMock(),
+                        symbols=["BTCUSDT"],
+                        now=datetime.now(UTC),
+                        initial_cash_usdt=Decimal("500"),
+                    )
+
+        assert len(inputs) == 1
+        assert inputs[0].data_is_fresh is True
+
+    def test_data_is_fresh_aware_timestamp_stale(self):
+        """data_is_fresh is False when aware timestamp is older than the threshold."""
+        from datetime import UTC, datetime, timedelta
+        from decimal import Decimal
+        from unittest.mock import MagicMock, patch
+
+        from trading.runtime.runner import _build_cycle_inputs
+
+        # Old aware UTC timestamp (more than 30 min ago)
+        old_aware = datetime.now(UTC) - timedelta(minutes=45)
+
+        candle_mock = MagicMock()
+        candle_mock.open_time = old_aware
+        candle_mock.close = Decimal("50000")
+
+        candles_repo = MagicMock()
+        candles_repo.get_latest.return_value = candle_mock
+
+        exec_repo = MagicMock()
+        exec_repo.list_fills_chronological.return_value = []
+        exec_repo.list_recent_orders.return_value = []
+
+        with patch("trading.runtime.runner.CandlesRepository", return_value=candles_repo):
+            with patch("trading.runtime.runner.ExecutionRecordsRepository", return_value=exec_repo):
+                with patch(
+                    "trading.runtime.runner.PortfolioAccount",
+                    return_value=self._make_fake_portfolio(),
+                ):
+                    inputs = _build_cycle_inputs(
+                        session=MagicMock(),
+                        symbols=["BTCUSDT"],
+                        now=datetime.now(UTC),
+                        initial_cash_usdt=Decimal("500"),
+                    )
+
+        assert len(inputs) == 1
+        assert inputs[0].data_is_fresh is False
+
+    def test_data_is_fresh_no_candles(self):
+        """data_is_fresh is False when no candles are available."""
+        from datetime import UTC, datetime
+        from decimal import Decimal
+        from unittest.mock import MagicMock, patch
+
+        from trading.runtime.runner import _build_cycle_inputs
+
+        candles_repo = MagicMock()
+        candles_repo.get_latest.return_value = None
+
+        exec_repo = MagicMock()
+        exec_repo.list_fills_chronological.return_value = []
+        exec_repo.list_recent_orders.return_value = []
+
+        with patch("trading.runtime.runner.CandlesRepository", return_value=candles_repo):
+            with patch("trading.runtime.runner.ExecutionRecordsRepository", return_value=exec_repo):
+                with patch(
+                    "trading.runtime.runner.PortfolioAccount",
+                    return_value=self._make_fake_portfolio(),
+                ):
+                    inputs = _build_cycle_inputs(
+                        session=MagicMock(),
+                        symbols=["BTCUSDT"],
+                        now=datetime.now(UTC),
+                        initial_cash_usdt=Decimal("500"),
+                    )
+
+        assert len(inputs) == 1
+        assert inputs[0].data_is_fresh is False
