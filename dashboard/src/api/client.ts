@@ -141,6 +141,10 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   return apiFetch<RuntimeStatus>('/runtime/status');
 }
 
+export async function getControlPlane(): Promise<ControlPlaneResponse> {
+  return apiFetch<ControlPlaneResponse>('/runtime/control-plane');
+}
+
 // ── Analytics types ──────────────────────────────────────────────────────────
 
 export interface AnalyticsSummary {

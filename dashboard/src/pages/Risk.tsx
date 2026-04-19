@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { getRiskStatus, getRecentEvents, type RiskStatus, type EventsSummary } from '../api/client';
 import { severityBadge, fmtNum, fmtTime } from '../lib';
 
@@ -75,30 +75,30 @@ export default function Risk() {
   const [riskFailed, setRiskFailed] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const fetchRisk = () => {
+  const fetchRisk = useCallback(() => {
     getRiskStatus(500, 500)
       .then((data) => { setRisk(data); setRiskFailed(false); })
       .catch(() => { setRiskFailed(true); setRisk(PLACEHOLDER_RISK); })
       .finally(() => setLoading(false));
-  };
+  }, []);
 
-  const fetchRejects = () => {
+  const fetchRejects = useCallback(() => {
     getRecentEvents({ limit: 20 })
       .then((r) => setRejects(r.events.filter((e) => e.event_type === 'risk_rejected')))
       .catch(() => setRejects(PLACEHOLDER_REJECTS));
-  };
+  }, []);
 
-  const fetchGateBlocks = () => {
+  const fetchGateBlocks = useCallback(() => {
     getRecentEvents({ limit: 10 })
       .then((r) => setGateBlocks(r.events.filter((e) => e.event_type === 'execution_gate_blocked')))
       .catch(() => setGateBlocks(PLACEHOLDER_GATE));
-  };
+  }, []);
 
-  const fetchSupervisorErrors = () => {
+  const fetchSupervisorErrors = useCallback(() => {
     getRecentEvents({ limit: 10 })
       .then((r) => setSupervisorErrors(r.events.filter((e) => e.event_type === 'supervisor_component_error')))
       .catch(() => setSupervisorErrors(PLACEHOLDER_SUPERVISOR));
-  };
+  }, []);
 
   useEffect(() => {
     fetchRisk();
@@ -107,7 +107,7 @@ export default function Risk() {
     fetchSupervisorErrors();
     const id = setInterval(() => { fetchRisk(); fetchRejects(); fetchGateBlocks(); fetchSupervisorErrors(); }, 30_000);
     return () => clearInterval(id);
-  }, []);
+  }, [fetchRisk, fetchRejects, fetchGateBlocks, fetchSupervisorErrors]);
 
   const displayRisk = riskFailed ? PLACEHOLDER_RISK : risk;
 

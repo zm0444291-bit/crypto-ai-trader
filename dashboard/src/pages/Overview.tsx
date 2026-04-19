@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   getHealth,
   getRiskStatus,
@@ -493,7 +493,7 @@ export default function Overview() {
 
   const hasApiFailure = Object.values(failures).some(Boolean);
 
-  const fetchAll = () => {
+  const fetchAll = useCallback(() => {
     getHealth()
       .then((data) => { setHealth(data); setFailures((f) => ({ ...f, health: false })); })
       .catch(() => setFailures((f) => ({ ...f, health: true })));
@@ -519,13 +519,13 @@ export default function Overview() {
       .catch(() => setFailures((f) => ({ ...f, runtime: true })));
 
     setLastUpdated(new Date());
-  };
+  }, []);
 
   useEffect(() => {
     fetchAll();
     const id = setInterval(fetchAll, 10_000);
     return () => clearInterval(id);
-  }, []);
+  }, [fetchAll]);
 
   return (
     <div className="page">

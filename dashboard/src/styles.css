@@ -91,7 +91,6 @@ body {
 
 .offline-notice svg { color: var(--warning); flex-shrink: 0; }
 
-.offline-notice svg { color: var(--warning); flex-shrink: 0; }
 
 /* ── Status strip ──────────────────────────────────────────────────────────── */
 .status-strip {
@@ -262,20 +261,6 @@ body {
 .side-buy  { color: var(--positive); }
 .side-sell { color: var(--negative); }
 
-/* ── Fallback / offline state ──────────────────────────────────────────────── */
-.offline-notice {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  background: rgba(230, 149, 0, 0.08);
-  border: 1px dashed rgba(230, 149, 0, 0.4);
-  border-radius: var(--r);
-  margin-bottom: 16px;
-  font-size: 0.8rem;
-  color: var(--warning);
-  font-family: var(--mono);
-}
 
 /* ── Empty state ──────────────────────────────────────────────────────────── */
 .empty-state {
