@@ -121,19 +121,21 @@ function OfflineNotice() {
 function StatusStrip({
   health,
   risk,
-  isOffline,
+  healthFailed,
+  riskFailed,
 }: {
   health: HealthStatus | null;
   risk: RiskStatus | null;
-  isOffline: boolean;
+  healthFailed: boolean;
+  riskFailed: boolean;
 }) {
-  const displayRisk = isOffline ? PLACEHOLDER_RISK : risk;
+  const displayRisk = riskFailed ? PLACEHOLDER_RISK : risk;
   return (
     <div className="status-strip">
       <div className="status-pill">
         <span className="label">Mode</span>
         <span className="value">
-          {health?.trade_mode ?? (isOffline ? 'paper_auto' : '—')}
+          {health?.trade_mode ?? (healthFailed ? 'paper_auto' : '—')}
         </span>
       </div>
       <div className="status-pill">
@@ -141,17 +143,17 @@ function StatusStrip({
         <span className="value">
           {health
             ? health.live_trading_enabled ? 'Enabled' : 'Disabled'
-            : (isOffline ? 'Disabled' : '—')}
+            : (healthFailed ? 'Disabled' : '—')}
         </span>
       </div>
       <div className="status-pill">
-        <span className={`dot ${displayRisk ? riskDot(displayRisk.risk_state) : (isOffline ? 'dot-placeholder' : 'dot-disabled')}`} />
+        <span className={`dot ${displayRisk ? riskDot(displayRisk.risk_state) : (riskFailed ? 'dot-placeholder' : 'dot-disabled')}`} />
         <span className="label">Risk State</span>
-        <span className="value">{displayRisk?.risk_state ?? (isOffline ? 'normal' : '—')}</span>
+        <span className="value">{displayRisk?.risk_state ?? (riskFailed ? 'normal' : '—')}</span>
       </div>
       <div className="status-pill">
         <span className="label">Profile</span>
-        <span className="value">{displayRisk?.risk_profile.name ?? (isOffline ? 'small_balanced' : '—')}</span>
+        <span className="value">{displayRisk?.risk_profile.name ?? (riskFailed ? 'small_balanced' : '—')}</span>
       </div>
     </div>
   );
@@ -160,49 +162,50 @@ function StatusStrip({
 function MetricsGrid({
   portfolio,
   risk,
-  isOffline,
+  riskFailed,
+  portfolioFailed,
 }: {
   portfolio: PortfolioStatus | null;
   risk: RiskStatus | null;
-  isOffline: boolean;
+  riskFailed: boolean;
+  portfolioFailed: boolean;
 }) {
-  const displayPortfolio = isOffline ? PLACEHOLDER_PORTFOLIO : portfolio;
-  const displayRisk      = isOffline ? PLACEHOLDER_RISK : risk;
+  const displayPortfolio = portfolioFailed ? PLACEHOLDER_PORTFOLIO : portfolio;
+  const displayRisk      = riskFailed ? PLACEHOLDER_RISK : risk;
 
   const equity   = displayPortfolio?.total_equity_usdt ?? null;
-  const cash      = displayPortfolio?.cash_balance_usdt ?? null;
-  const pnlPct    = displayRisk?.daily_pnl_pct ?? null;
-  const maxRisk   = displayRisk?.max_trade_risk_usdt ?? null;
+  const cash     = displayPortfolio?.cash_balance_usdt ?? null;
+  const pnlPct   = displayRisk?.daily_pnl_pct ?? null;
+  const maxRisk  = displayRisk?.max_trade_risk_usdt ?? null;
 
   const pnlClass = pnlPct !== null
     ? (parseFloat(pnlPct) >= 0 ? 'positive' : 'negative')
-    : isOffline ? 'placeholder'
-    : '';
+    : (riskFailed ? 'placeholder' : '');
 
   return (
     <div className="metrics-grid">
       <div className="metric-card">
         <div className="metric-label">Account Equity</div>
-        <div className={`metric-value ${isOffline && equity === null ? 'placeholder' : ''}`}>
-          {equity !== null ? `$${fmtNum(equity)}` : (isOffline ? '$500.00' : '—')}
+        <div className={`metric-value ${portfolioFailed && equity === null ? 'placeholder' : ''}`}>
+          {equity !== null ? `$${fmtNum(equity)}` : (portfolioFailed ? '$500.00' : '—')}
         </div>
       </div>
       <div className="metric-card">
         <div className="metric-label">Cash Balance</div>
-        <div className={`metric-value ${isOffline && cash === null ? 'placeholder' : ''}`}>
-          {cash !== null ? `$${fmtNum(cash)}` : (isOffline ? '$500.00' : '—')}
+        <div className={`metric-value ${portfolioFailed && cash === null ? 'placeholder' : ''}`}>
+          {cash !== null ? `$${fmtNum(cash)}` : (portfolioFailed ? '$500.00' : '—')}
         </div>
       </div>
       <div className="metric-card">
         <div className="metric-label">Today PnL</div>
         <div className={`metric-value ${pnlClass}`}>
-          {pnlPct !== null ? fmtPct(pnlPct) : (isOffline ? '+0.00%' : '—')}
+          {pnlPct !== null ? fmtPct(pnlPct) : (riskFailed ? '+0.00%' : '—')}
         </div>
       </div>
       <div className="metric-card">
         <div className="metric-label">Max Trade Risk</div>
-        <div className={`metric-value ${isOffline && maxRisk === null ? 'placeholder' : ''}`}>
-          {maxRisk !== null ? `$${fmtNum(maxRisk)}` : (isOffline ? '$7.50' : '—')}
+        <div className={`metric-value ${riskFailed && maxRisk === null ? 'placeholder' : ''}`}>
+          {maxRisk !== null ? `$${fmtNum(maxRisk)}` : (riskFailed ? '$7.50' : '—')}
         </div>
       </div>
     </div>
@@ -399,13 +402,15 @@ export default function App() {
       <StatusStrip
         health={failures.health ? null : health}
         risk={failures.risk ? null : risk}
-        isOffline={hasApiFailure}
+        healthFailed={failures.health}
+        riskFailed={failures.risk}
       />
 
       <MetricsGrid
         portfolio={failures.portfolio ? null : portfolio}
         risk={failures.risk ? null : risk}
-        isOffline={hasApiFailure}
+        riskFailed={failures.risk}
+        portfolioFailed={failures.portfolio}
       />
       <PositionsSection positions={failures.portfolio ? null : (portfolio?.positions ?? null)} />
       <OrdersSection orders={failures.orders ? null : orders} />

@@ -1,21 +1,19 @@
 # Last Claude Code Result
 
-Task: Dashboard Partial API Failure Visibility
+Task: Dashboard Partial API Failure Visibility — granular per-panel failure flags
 Status: completed
 
 Files changed:
-- dashboard/src/App.tsx (per-panel failure tracking)
-- docs/claude-tasks/last-result.md (updated)
+- dashboard/src/App.tsx (granular failure props for StatusStrip and MetricsGrid)
 
 Verification:
-- `cd dashboard && npm run build` — succeeded (tsc + vite build, 243ms)
+- `cd dashboard && npm run build` — succeeded
 - `ruff check .` — all checks passed
-- `pytest -q` — 148 passed in 0.43s
-- `git status --short` — clean (only App.tsx and current-task.md)
+- `pytest -q` — 148 passed
 
 Commit:
-- `git add dashboard/src/App.tsx docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md`
-- `git commit -m "fix: show dashboard partial API failures"`
+- `git add dashboard/src/App.tsx`
+- `git commit -m "fix: use granular failure flags for StatusStrip and MetricsGrid"`
 
 Safety:
 - No order execution added.
@@ -25,7 +23,6 @@ Safety:
 - Dashboard remains read-only.
 
 Notes:
-- Replaced `offline = !health && !risk && ...` with per-panel `failures` state.
-- `hasApiFailure = Object.values(failures).some(Boolean)` drives the offline notice.
-- Each panel receives null/placeholder only when its own API failed, preserving real data from successful calls.
-- EventsSection shows placeholder event when `/events/recent` itself fails.
+- StatusStrip now uses `healthFailed` and `riskFailed` instead of global `isOffline`.
+- MetricsGrid now uses `riskFailed` and `portfolioFailed` instead of global `isOffline`.
+- Each panel falls back independently based on its own relevant API failures.
