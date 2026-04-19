@@ -98,11 +98,25 @@ make runtime-loop
 
 ### AI scoring (optional)
 
-If `AI_SCORING_URL` is set, the runtime uses a remote AI scorer to evaluate candidates. When the URL is absent, scoring fails closed (all candidates rejected) — the cycle continues but no trades are executed.
+By default (`AI_SCORING_BACKEND=http`), if `AI_SCORING_URL` is set, the runtime uses a remote AI scorer to evaluate candidates. When the URL is absent, scoring fails closed (all candidates rejected) — the cycle continues but no trades are executed.
 
 ```bash
+export AI_SCORING_BACKEND=http
 export AI_SCORING_URL=https://your-ai-service.example.com/score
 export AI_SCORING_TIMEOUT=30
+make runtime-loop
+```
+
+MiniMax integration (OpenAI-compatible API):
+
+```bash
+export AI_SCORING_BACKEND=minimax
+export MINIMAX_API_KEY=your_minimax_api_key
+# Global endpoint (international): https://api.minimax.io/v1
+# Mainland China endpoint:        https://api.minimaxi.com/v1
+export MINIMAX_BASE_URL=https://api.minimax.io/v1
+export MINIMAX_MODEL=MiniMax-M2.1
+export MINIMAX_TIMEOUT=30
 make runtime-loop
 ```
 

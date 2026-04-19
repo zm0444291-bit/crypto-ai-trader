@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from decimal import Decimal
 
 from trading.ai.http_client import HttpAIScoringClient
+from trading.ai.minimax_client import MiniMaxAIScoringClient
 from trading.ai.scorer import AIScorer
 from trading.runtime.runner import (
     create_runner_session_factory,
@@ -33,6 +35,13 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+def _build_ai_scorer() -> AIScorer:
+    backend = os.environ.get("AI_SCORING_BACKEND", "http").strip().lower()
+    if backend == "minimax":
+        return AIScorer(MiniMaxAIScoringClient())
+    return AIScorer(HttpAIScoringClient())
 
 
 def main() -> None:
@@ -83,8 +92,7 @@ def main() -> None:
     args = parser.parse_args()
 
     session_factory = create_runner_session_factory()
-    scoring_client = HttpAIScoringClient()
-    ai_scorer = AIScorer(scoring_client)
+    ai_scorer = _build_ai_scorer()
 
     if args.once:
         logger.info("Running one paper trading cycle...")
