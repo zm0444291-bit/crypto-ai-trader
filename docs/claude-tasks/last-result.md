@@ -1,36 +1,62 @@
-# Last Claude Code Result
+# Completion Report: Local Runtime Ops Diagnostics & Runbook
 
-Task: Runtime Ops Hardening (24/7 Local Reliability, Paper-Only)
-Status: completed
+## Task
 
-Files changed:
-- `trading/runtime/supervisor.py` — Added `_start_time` tracking, `_emit_heartbeat()` recording `supervisor_heartbeat` events every 60s with ingest/trading thread alive flags, uptime_seconds, symbols; heartbeat thread with immediate first beat; `uptime_seconds` in `supervisor_stopped` context; `startup_timestamp_utc` and `process_mode` in `supervisor_started` context
-- `trading/dashboard_api/routes_runtime.py` — Added 6 new fields to `RuntimeStatusResponse`: `supervisor_alive`, `ingestion_thread_alive`, `trading_thread_alive`, `uptime_seconds`, `last_heartbeat_time`, `last_component_error`
-- `dashboard/src/api/client.ts` — Added new RuntimeStatus fields to TypeScript interface
-- `dashboard/src/pages/Overview.tsx` — Enhanced RuntimeSection with alive/degraded dot, formatted uptime, last heartbeat time, component error display
-- `Makefile` — Added `runtime-health` (curl health/runtime/risk endpoints) and `runtime-tail-events` (Python inline script to print recent events) targets
-- `README.md` — Added "24/7 Local Ops" section covering supervisor startup, health checks, event tail, stop, and heartbeat semantics
-- `tests/unit/test_runtime_supervisor.py` — Added `TestSupervisorHeartbeat` with 4 tests: heartbeat event structure, startup fields, heartbeat thread exits promptly, uptime in stopped context
-- `tests/integration/test_runtime_status_api.py` — Added `TestRuntimeStatusHeartbeatFields` with 4 tests: null defaults, live heartbeat, stale heartbeat (False), component error field
+Improve local ops observability and runbook quality for 24/7 paper runtime operations.
 
-Verification:
-- `.venv/bin/ruff check .` — all passed
-- `.venv/bin/pytest -q` — 220 passed
-- `cd dashboard && npm run build` — built in 350ms, no errors
+## Scope
 
-Commit:
-- `cb87363` feat: harden local runtime ops observability and health checks
+### 1) Makefile ops commands
+- **Added `runtime-health`** — concisely curls `/health`, `/runtime/status`, and `/risk/status?day_start_equity=500&current_equity=500` with operator-friendly short output.
+- **Replaced `runtime-tail-events`** — wired to new Python helper instead of inline shell heredoc.
 
-Safety:
-- No live trading changes.
-- No private Binance API changes.
-- No API key handling changes.
-- No order placement endpoint.
-- No risk control bypass.
-- Paper-only behavior preserved.
+### 2) `runtime-tail-events` Python CLI helper
+- **Created `trading/runtime/event_tail.py`** — a proper `python -m trading.runtime.event_tail` CLI that:
+  - Reads recent events from DB via `EventsRepository`
+  - Supports `--limit N`, `--component C`, `--severity S`, `--event-type T` filters
+  - Prints time, severity, component, event_type, message (truncated at 50 chars)
+- **Wired Makefile target** `runtime-tail-events` to `$(PYTHON) -m trading.runtime.event_tail`
 
-Notes:
-- Heartbeat fires immediately on startup, then every 60s while supervisor runs
-- `supervisor_alive` = True if heartbeat within 2 min, False if stale, null if no heartbeat ever
-- All new API fields default to null (safe) when supervisor has never run
-- `runtime-tail-events` uses inline Python to read DB directly, no server needed
+### 3) README runbook update
+- **Expanded "24/7 Local Ops" section** with:
+  - Start supervisor commands
+  - `runtime-health` with output description
+  - Filter examples for `runtime-tail-events`
+  - **"What healthy looks like" table** — green signals per endpoint
+  - **"Common failures and first-action checklist" table** — symptom → first action mapping
+
+## Files Changed
+
+| File | Change |
+|------|--------|
+| `Makefile` | Added `runtime-health` target; rewrote `runtime-tail-events` to call Python module |
+| `README.md` | Expanded 24/7 Local Ops section with health table and failure checklist |
+| `trading/runtime/event_tail.py` | **New** — CLI helper for tailing events with filters |
+| `trading/runtime/state.py` | Fixed `F821` pre-existing undefined name: moved `LiveTradingLock` to `TYPE_CHECKING` block |
+| `tests/unit/test_event_tail.py` | **New** — unit tests for helper (time formatting, filtering, limit) |
+
+## Verification
+
+```
+cd /Users/zihanma/Desktop/crypto-ai-trader
+.venv/bin/ruff check .                       # All checks passed
+.venv/bin/pytest -q                         # 276 passed in 2.44s
+cd /Users/zihanma/Desktop/crypto-ai-trader/dashboard
+npm run build                               # ✓ built in 381ms
+```
+
+## Commit
+
+```bash
+git add Makefile README.md trading/runtime tests docs/claude-tasks/last-result.md
+git commit -m "feat: add local runtime ops diagnostics and runbook"
+```
+
+## Safety Checklist
+
+- No live trading — confirmed
+- No private Binance API — confirmed, no API key handling changes
+- No write endpoints — confirmed
+- No key handling changes — confirmed
+- Existing tests pass — 276 passed
+- Dashboard build succeeds — confirmed

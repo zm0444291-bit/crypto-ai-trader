@@ -61,23 +61,7 @@ runtime-health:
 	@echo "=== Risk Status ===" && curl -s "$(API_BASE)/risk/status?day_start_equity=500&current_equity=500" | $(PYTHON) -m json.tool
 
 runtime-tail-events:
-	$(PYTHON) -c " \
-from trading.runtime.config import AppSettings; \
-from trading.storage.db import create_database_engine, create_session_factory, init_db; \
-from trading.storage.repositories import EventsRepository; \
-settings = AppSettings(); \
-engine = create_database_engine(settings.database_url); \
-init_db(engine); \
-factory = create_session_factory(engine); \
-with factory() as session: \
-    repo = EventsRepository(session); \
-    events = repo.list_recent(limit=30); \
-print(f'{'TIME':<28} {'SEVERITY':<10} {'COMPONENT':<15} {'TYPE':<35} MESSAGE'); \
-print('-' * 110); \
-for e in reversed(events): \
-    msg = e.message[:50] if len(e.message) > 50 else e.message; \
-    print(f'{str(e.created_at):<28} {e.severity:<10} {e.component:<15} {e.event_type:<35} {msg}'); \
-"
+	$(PYTHON) -m trading.runtime.event_tail
 
 check:
 	$(RUFF) check .

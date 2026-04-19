@@ -45,21 +45,45 @@ make runtime-supervisor INGEST_INTERVAL=120 TRADE_INTERVAL=60  # custom interval
 make runtime-health   # curl health, runtime status, and risk status endpoints
 ```
 
-Expected healthy signals:
-- `supervisor_alive: true` — recent heartbeat recorded (within 2 min)
-- `ingestion_thread_alive: true` and `trading_thread_alive: true` — both loops running
-- `uptime_seconds` increasing on each heartbeat
-- `last_component_error: null` — no component crashes
+Output is operator-friendly and compact — each check prints a short label and a pass/fail summary line, with full JSON available on the API endpoints directly.
+
+**What "healthy" looks like:**
+
+| Check | Healthy signal |
+|-------|---------------|
+| `/health` | `status: "ok"` |
+| `/runtime/status` `supervisor_alive` | `true` — heartbeat within last 2 min |
+| `/runtime/status` `ingestion_thread_alive` | `true` |
+| `/runtime/status` `trading_thread_alive` | `true` |
+| `/runtime/status` `last_component_error` | `null` — no recent crashes |
+| `/risk/status` `risk_state` | `"green"` with equity unchanged |
 
 ### Inspect recent events
 
 ```bash
-make runtime-tail-events   # print last 30 events from the DB
+make runtime-tail-events   # last 30 events from the DB
+
+# with filters
+python -m trading.runtime.event_tail --limit 10 --severity error
+python -m trading.runtime.event_tail --component supervisor --limit 50
+python -m trading.runtime.event_tail --event-type cycle_error
 ```
 
 ### Stop the supervisor
 
 Press `Ctrl+C` — the supervisor handles shutdown cleanly, sets the stop event, waits for both loops, and records `supervisor_stopped` with uptime.
+
+### Common failures and first-action checklist
+
+| Symptom | First action |
+|---------|-------------|
+| `supervisor_alive: false` | Check that the supervisor process is still running; re-run `make runtime-supervisor` |
+| `ingestion_thread_alive: false` | Run `make db-init` then restart supervisor |
+| `trading_thread_alive: false` | Check Telegram/AI scorer env vars; try `make runtime-once` for a single cycle |
+| `risk_state: red` | Equity has dropped; review `make runtime-tail-events --severity error` |
+| `/risk/status` returns 500 | Run `make db-init` to ensure DB schema is current |
+| Dashboard shows stale data | Backend may be down; verify with `curl http://127.0.0.1:8000/health` |
+| Many `cycle_error` events | Run `make runtime-once` manually to see cycle-level error output |
 
 ### Runtime heartbeat
 
