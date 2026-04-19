@@ -487,6 +487,12 @@ body {
   .analytics-metrics { grid-template-columns: repeat(4, 1fr); }
 }
 
+/* ── Event reason inline ─────────────────────────────────────────────────── */
+.event-reason {
+  color: var(--text-muted);
+  font-size: 0.75em;
+}
+
 /* ── Filter bar ──────────────────────────────────────────────────────────── */
 .filter-bar {
   display: flex;
@@ -584,6 +590,57 @@ body {
   color: var(--accent);
   line-height: 1.5;
 }
+
+/* ── Execution status banner ───────────────────────────────────────────── */
+.exec-status-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: var(--r);
+  margin-bottom: 10px;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  border: 1px solid;
+}
+
+.exec-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.exec-status-label {
+  font-weight: 600;
+  flex: 1;
+}
+
+.exec-status-route {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+.exec-banner-paper  { background: rgba(0,212,170,0.06); border-color: rgba(0,212,170,0.2); color: var(--positive); }
+.exec-banner-paper .exec-status-dot { background: var(--positive); }
+
+.exec-banner-locked { background: rgba(255,77,77,0.06); border-color: rgba(255,77,77,0.2); color: var(--negative); }
+.exec-banner-locked .exec-status-dot { background: var(--negative); }
+
+.exec-banner-dryrun { background: rgba(230,149,0,0.06); border-color: rgba(230,149,0,0.2); color: var(--warning); }
+.exec-banner-dryrun .exec-status-dot { background: var(--warning); }
+
+.exec-banner-shadow { background: rgba(91,156,246,0.06); border-color: rgba(91,156,246,0.2); color: var(--info); }
+.exec-banner-shadow .exec-status-dot { background: var(--info); }
+
+.exec-banner-blocked { background: rgba(255,77,77,0.06); border-color: rgba(255,77,77,0.2); color: var(--negative); }
+.exec-banner-blocked .exec-status-dot { background: var(--negative); }
+
+.exec-banner-live   { background: rgba(255,77,77,0.08); border-color: rgba(255,77,77,0.3); color: var(--danger); }
+.exec-banner-live   .exec-status-dot { background: var(--danger); }
+
+.exec-banner-default { background: rgba(136,136,136,0.06); border-color: rgba(136,136,136,0.2); color: var(--text-muted); }
+.exec-banner-default .exec-status-dot { background: var(--text-muted); }
 
 /* ── Notice card ────────────────────────────────────────────────────────── */
 .notice-card {

@@ -499,3 +499,196 @@ def test_position_size_rejection_stops_before_execution():
     assert "signal_generated" in event_types
     assert "risk_rejected" in event_types  # size rejection maps to risk_rejected event
     assert "order_executed" not in event_types
+
+
+# ── Shadow route tests ──────────────────────────────────────────────────────────
+
+
+class FakeShadowRepo:
+    def __init__(self) -> None:
+        self.recorded: list[dict] = []
+
+    def record_shadow_execution(
+        self,
+        symbol: str,
+        side: str,
+        planned_notional_usdt: Decimal,
+        reference_price: Decimal,
+        simulated_fill_price: Decimal,
+        simulated_slippage_bps: Decimal,
+        decision_reason: str,
+        source_cycle_status: str | None = None,
+    ) -> MagicMock:
+        record = MagicMock()
+        record.symbol = symbol
+        record.side = side
+        record.planned_notional_usdt = planned_notional_usdt
+        record.reference_price = reference_price
+        record.simulated_fill_price = simulated_fill_price
+        record.simulated_slippage_bps = simulated_slippage_bps
+        record.decision_reason = decision_reason
+        record.source_cycle_status = source_cycle_status
+        self.recorded.append(record)
+        return record
+
+
+_SHADOW_LOCK = LiveTradingLock()
+
+
+@contextmanager
+def _live_shadow_patches(shadow_repo: FakeShadowRepo):
+    """Patch get_trade_mode and get_live_trading_lock for live_shadow mode."""
+    with patch(
+        "trading.runtime.paper_cycle.get_trade_mode", return_value="live_shadow"
+    ), patch(
+        "trading.runtime.paper_cycle.get_live_trading_lock", return_value=_SHADOW_LOCK
+    ), patch(
+        "trading.runtime.paper_cycle.ShadowExecutionRepository", return_value=shadow_repo
+    ):
+        yield
+
+
+def test_live_shadow_route_records_shadow_and_does_not_execute_paper_order():
+    """When gate route is shadow, a shadow record is created and paper executor is NOT called."""
+    input_data = make_input()
+
+    fake_session = MagicMock()
+    fake_repo = MagicMock()
+    fake_repo.list_recent.return_value = []
+    fake_session.__enter__ = MagicMock(return_value=fake_session)
+    fake_session.__exit__ = MagicMock(return_value=None)
+
+    def factory() -> MagicMock:
+        return fake_session
+
+    ai_scorer = MagicMock()
+    ai_scorer.score_candidate.return_value = make_ai_pass(ai_score=85)
+
+    executor = MagicMock()
+    executor.slippage_bps = Decimal("0")
+
+    events_repo = FakeEventsRepo()
+    exec_repo = FakeExecRepo()
+    shadow_repo = FakeShadowRepo()
+
+    with patch(
+        "trading.runtime.paper_cycle.CandlesRepository",
+        return_value=fake_repo,
+    ):
+        with patch(
+            "trading.runtime.paper_cycle.generate_momentum_candidate",
+            return_value=make_candidate(),
+        ):
+            with _live_shadow_patches(shadow_repo):
+                result = run_paper_cycle(
+                    input_data,
+                    events_repo=events_repo,
+                    exec_repo=exec_repo,
+                    executor=executor,
+                    ai_scorer=ai_scorer,
+                    session_factory=factory,
+                )
+
+    assert result.status == "shadow_recorded"
+    assert result.candidate_present is True
+    assert result.order_executed is False
+
+    # Paper executor should NOT have been called
+    executor.execute_market_buy.assert_not_called()
+
+    # No paper execution recorded
+    assert exec_repo.recorded == []
+
+    # Shadow record should have been created
+    assert len(shadow_repo.recorded) == 1
+    shadow_record = shadow_repo.recorded[0]
+    assert shadow_record.symbol == "BTCUSDT"
+    assert shadow_record.side == "BUY"
+    assert shadow_record.planned_notional_usdt == Decimal("100")
+    assert shadow_record.decision_reason == "Looks good."
+
+    event_types = [ev.event_type for ev in events_repo.events]
+    assert "cycle_started" in event_types
+    assert "signal_generated" in event_types
+    assert "shadow_execution_recorded" in event_types
+    assert "order_executed" not in event_types
+    assert "cycle_finished" in event_types
+
+    # The cycle_finished event should have shadow_recorded status
+    finished_ev = next(ev for ev in events_repo.events if ev.event_type == "cycle_finished")
+    assert finished_ev.context_json["status"] == "shadow_recorded"
+
+
+def test_paper_auto_still_executes_paper_path():
+    """Verify paper_auto route still calls executor and records paper order (regression test)."""
+    input_data = make_input()
+
+    fake_session = MagicMock()
+    fake_repo = MagicMock()
+    fake_repo.list_recent.return_value = []
+    fake_session.__enter__ = MagicMock(return_value=fake_session)
+    fake_session.__exit__ = MagicMock(return_value=None)
+
+    def factory() -> MagicMock:
+        return fake_session
+
+    ai_scorer = MagicMock()
+    ai_scorer.score_candidate.return_value = make_ai_pass(ai_score=85)
+
+    exec_order = PaperOrder(
+        symbol="BTCUSDT",
+        side="BUY",
+        order_type="MARKET",
+        requested_notional_usdt=Decimal("100"),
+        status="FILLED",
+        created_at=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
+    )
+    exec_fill = PaperFill(
+        symbol="BTCUSDT",
+        side="BUY",
+        price=Decimal("100000"),
+        qty=Decimal("0.001"),
+        fee_usdt=Decimal("0.25"),
+        slippage_bps=Decimal("0"),
+        filled_at=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
+    )
+    from trading.execution.paper_executor import PaperExecutionResult
+    exec_result = PaperExecutionResult(
+        approved=True,
+        order=exec_order,
+        fill=exec_fill,
+        reject_reasons=[],
+    )
+    executor = MagicMock()
+    executor.execute_market_buy.return_value = exec_result
+
+    events_repo = FakeEventsRepo()
+    exec_repo = FakeExecRepo()
+
+    with patch(
+        "trading.runtime.paper_cycle.CandlesRepository",
+        return_value=fake_repo,
+    ):
+        with patch(
+            "trading.runtime.paper_cycle.generate_momentum_candidate",
+            return_value=make_candidate(),
+        ):
+            with _paper_auto_patches():
+                result = run_paper_cycle(
+                    input_data,
+                    events_repo=events_repo,
+                    exec_repo=exec_repo,
+                    executor=executor,
+                    ai_scorer=ai_scorer,
+                    session_factory=factory,
+                )
+
+    # Paper path should execute
+    assert result.status == "executed"
+    assert result.order_executed is True
+
+    # Paper executor SHOULD have been called
+    executor.execute_market_buy.assert_called_once()
+
+    # Paper execution should be recorded
+    assert len(exec_repo.recorded) == 1

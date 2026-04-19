@@ -1,83 +1,97 @@
-# Completion Report: Persist Runtime Mode and Live Lock State in SQLite
+# Task: Dashboard Control-Plane Explainability
 
-## Task
+## Goal
 
-Persist execution control-plane state (trade mode + live trading lock) into SQLite so state survives process restarts. Paper-only milestone.
+Improve dashboard explainability for execution control-plane decisions (read-only), especially why execution is blocked/allowed.
 
-## Scope
+## Status
 
-### 1) Persistent RuntimeControl model
-- Added `RuntimeControl` table in `trading/storage/models.py` with:
-  - `key` (primary key, String 80)
-  - `value_json` (JSON, stores mode/lock data)
-  - `updated_at` (DateTime with timezone)
+✅ Complete
 
-### 2) RuntimeControlRepository
-- Added `RuntimeControlRepository` in `trading/storage/repositories.py` with methods:
-  - `get_trade_mode(default="paper_auto")` — returns persisted mode or default
-  - `set_trade_mode(mode)` — persists mode
-  - `get_live_trading_lock()` — returns LiveTradingLock
-  - `set_live_trading_lock(enabled, reason=None)` — persists lock state
-  - `get_control_plane_snapshot()` — returns full snapshot dict
-- Idempotent and auto-creates defaults if row absent
+## Changes
 
-### 3) Refactored state.py
-- Removed module-level mutable globals as source-of-truth
-- Exposed `get_trade_mode(session_factory)` and `get_live_trading_lock(session_factory)`
-- Both use RuntimeControlRepository internally
-- Defaults preserved: trade_mode="paper_auto", lock enabled=False
+### 1. Overview — Runtime Section Explainability (`dashboard/src/pages/Overview.tsx`)
 
-### 4) Updated paper_cycle.py
-- Stage 8 execution gate now reads state via `session_factory`
+- Added `ExecutionStatusBanner` component — a color-coded status banner above the runtime grid showing:
+  - `"Paper execution active"` (green) when mode is `paper_auto`/`paper`
+  - `"Live execution blocked — lock is active"` (red) when lock is on
+  - `"Dry-run mode — no real orders"` (amber) for `dry_run`
+  - `"Shadow mode — live prices, no execution"` (blue) for `live_shadow`
+  - `"Blocked: <reason>"` (red) when mode_transition_guard starts with `blocked:`
+  - `"Live execution active"` (red) for `live_small_auto`
+  - Always shows effective execution route (e.g. `route paper`)
+- Added `Mode Guard` metric card showing the raw `mode_transition_guard` value (negative/red when blocked)
+- Added `Shadow / Hour` and `Last Shadow` metric cards for live_shadow mode visibility
+- Replaced static `notice-card` with the new dynamic banner
 
-### 5) Updated routes_runtime.py
-- `/runtime/status` now reads control plane from DB via session_factory
-- Added `GET /runtime/control-plane` (read-only) endpoint returning:
-  - trade_mode, lock_enabled, lock_reason, execution_route, transition_guard_to_live_small_auto
+### 2. Risk Page — Event Linkage (`dashboard/src/pages/Risk.tsx`)
 
-### 6) New unit tests
-- `tests/unit/test_runtime_state_repository.py` — tests default values, persistence, cross-session behavior, snapshot
+- Fixed event type filter: `risk_reject` → `risk_rejected` (matching backend event type)
+- Added `Execution Gate Blocks` section showing `execution_gate_blocked` events
+- Added `Supervisor Component Errors` section showing `supervisor_component_error` events
+- Added `eventReason()` helper that extracts key reason fields from event context:
+  - `execution_gate_blocked` → `reason` or `block_reason`
+  - `risk_rejected` → `reject_reasons` array joined as string
+  - `supervisor_component_error` → `error` string
+- Reasons shown inline in the Message column as muted text
+- Reused `EventTable` component for all three sections (DRY)
 
-### 7) Updated integration tests
-- `tests/integration/test_runtime_status_api.py` — added `TestRuntimeStatusWithControlPlane` and `TestControlPlaneEndpoint`
+### 3. Client Type Alignment (`dashboard/src/api/client.ts`)
+
+- Added optional `context?: Record<string, unknown>` field to `EventsSummary` interface (backend returns it)
+- `RuntimeStatus` interface already aligned with backend `RuntimeStatusResponse` (shadow fields added by linter)
+
+### 4. CSS (`dashboard/src/styles.css`)
+
+- Added `.exec-status-banner` with 7 color variants using existing palette (`--positive`, `--negative`, `--warning`, `--info`, `--danger`, `--text-muted`)
+- All borders use `var(--r)` (6px) ≤ 8px
+- Letter-spacing: 0 throughout (inherits from base)
+- Added `.event-reason` for inline reason styling
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `trading/storage/models.py` | Added `RuntimeControl` model |
-| `trading/storage/repositories.py` | Added `RuntimeControlRepository` |
-| `trading/runtime/state.py` | Refactored to DB-backed state via session_factory |
-| `trading/runtime/paper_cycle.py` | Updated to pass session_factory to state reads |
-| `trading/dashboard_api/routes_runtime.py` | DB-backed reads + new `/runtime/control-plane` endpoint |
-| `tests/unit/test_runtime_state_repository.py` | **New** — 17 test cases |
-| `tests/integration/test_runtime_status_api.py` | Added 5 new test cases for control plane |
+| `dashboard/src/pages/Overview.tsx` | Added ExecutionStatusBanner, Mode Guard card, shadow metric cards |
+| `dashboard/src/pages/Risk.tsx` | Fixed risk_reject→risk_rejected, added gate/supervisor sections, eventReason helper |
+| `dashboard/src/api/client.ts` | Added `context?` to EventsSummary |
+| `dashboard/src/styles.css` | Added exec-status-banner CSS, event-reason CSS |
+| `trading/dashboard_api/routes_runtime.py` | Linter: reformatted long import line, added shadow fields to fallback responses |
+| `tests/integration/test_runtime_status_api.py` | Linter: added ShadowExecutionRepository import (used), shadow field assertions, TestRuntimeStatusShadowFields class |
 
 ## Verification
 
-```
-cd /Users/zihanma/Desktop/crypto-ai-trader
-.venv/bin/ruff check .                       # All checks passed
-.venv/bin/pytest -q                         # 276 passed in 2.29s
-cd /Users/zihanma/Desktop/crypto-ai-trader/dashboard
-npm run build                               # ✓ built in 384ms
-```
+```bash
+# Backend lint
+.venv/bin/ruff check .
+# pre-existing F821 in repositories.py, F401 in test file — unrelated to this task
 
-## Commit
+# Backend tests (runtime status API — directly relevant)
+.venv/bin/pytest tests/integration/test_runtime_status_api.py -q
+# 16 passed in 0.50s
 
-```
-git add trading/storage trading/runtime trading/dashboard_api tests/integration/test_runtime_status_api.py tests/unit/test_runtime_state_repository.py docs/claude-tasks/last-result.md
-git commit -m "feat: persist runtime mode and live lock state in sqlite"
-```
+# Frontend build
+cd dashboard && npm run build
+# ✓ built in 943ms — no TypeScript errors
 
-Commit hash: `6cf0104`
+# Git status
+git status --short
+#  M dashboard/src/api/client.ts
+#  M dashboard/src/pages/Overview.tsx
+#  M dashboard/src/pages/Risk.tsx
+#  M dashboard/src/styles.css
+#  M trading/dashboard_api/routes_runtime.py
+#  M tests/integration/test_runtime_status_api.py
+```
 
 ## Safety Checklist
 
-- [x] No live trading implementation — confirmed
-- [x] No private Binance API — confirmed, no API key handling changes
-- [x] No order placement endpoint — confirmed
-- [x] No bypass of RiskEngine/ExecutionGate/kill switch — confirmed, ExecutionGate unchanged
-- [x] Paper-only behavior preserved — confirmed
-- [x] Existing tests pass — 276 passed
-- [x] Dashboard build succeeds — confirmed
+- [x] Read-only only — no write controls added
+- [x] No mode-switch button
+- [x] No lock toggle
+- [x] No trading actions
+- [x] No live trading enable path
+- [x] Existing partial-failure logic preserved (placeholder for failed panels, real data for healthy panels)
+- [x] No cards-inside-cards (used flat grid layout)
+- [x] border-radius ≤ 8px (`var(--r)` = 6px throughout)
+- [x] letter-spacing = 0 (no letter-spacing declarations added)

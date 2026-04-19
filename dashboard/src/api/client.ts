@@ -56,6 +56,7 @@ export interface EventsSummary {
   component: string;
   message: string;
   created_at: string;
+  context?: Record<string, unknown>;
 }
 
 export interface RuntimeStatus {
@@ -74,6 +75,16 @@ export interface RuntimeStatus {
   live_trading_lock_enabled: boolean;
   execution_route_effective: string;
   mode_transition_guard: string | null;
+  shadow_executions_last_hour: number;
+  last_shadow_time: string | null;
+}
+
+export interface ControlPlaneResponse {
+  trade_mode: string;
+  lock_enabled: boolean;
+  lock_reason: string | null;
+  execution_route: string;
+  transition_guard_to_live_small_auto: string;
 }
 
 // ── Fetch helper ──────────────────────────────────────────────────────────────

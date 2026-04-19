@@ -2,6 +2,57 @@ import { useEffect, useState } from 'react';
 import { getRiskStatus, getRecentEvents, type RiskStatus, type EventsSummary } from '../api/client';
 import { severityBadge, fmtNum, fmtTime } from '../lib';
 
+function eventReason(e: EventsSummary): string | null {
+  if (!e.context) return null;
+  const ctx = e.context as Record<string, unknown>;
+  if (e.event_type === 'execution_gate_blocked') {
+    const reason = ctx.reason ?? ctx.block_reason;
+    return reason ? String(reason) : null;
+  }
+  if (e.event_type === 'risk_rejected') {
+    const reasons = ctx.reject_reasons;
+    if (Array.isArray(reasons) && reasons.length > 0) return reasons.join(', ');
+    return null;
+  }
+  if (e.event_type === 'supervisor_component_error') {
+    return (ctx.error as string) ?? null;
+  }
+  return null;
+}
+
+function EventRow({ e }: { e: EventsSummary }) {
+  const reason = eventReason(e);
+  return (
+    <tr>
+      <td><span className={severityBadge(e.severity)}>{e.severity}</span></td>
+      <td>{e.component}</td>
+      <td>{e.message}{reason ? <span className="event-reason"> — {reason}</span> : null}</td>
+      <td>{fmtTime(e.created_at)}</td>
+    </tr>
+  );
+}
+
+function EventTable({ events, empty }: { events: EventsSummary[]; empty: string }) {
+  if (events.length === 0) return <div className="empty-state">{empty}</div>;
+  return (
+    <div className="table-scroll">
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th>Severity</th>
+            <th>Component</th>
+            <th>Message</th>
+            <th>Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {events.map((e) => <EventRow key={e.id} e={e} />)}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 const PLACEHOLDER_RISK: RiskStatus = {
   day_start_equity: '500',
   current_equity: '500',
@@ -13,10 +64,14 @@ const PLACEHOLDER_RISK: RiskStatus = {
 };
 
 const PLACEHOLDER_REJECTS: EventsSummary[] = [];
+const PLACEHOLDER_GATE: EventsSummary[] = [];
+const PLACEHOLDER_SUPERVISOR: EventsSummary[] = [];
 
 export default function Risk() {
   const [risk, setRisk] = useState<RiskStatus | null>(null);
   const [rejects, setRejects] = useState<EventsSummary[]>([]);
+  const [gateBlocks, setGateBlocks] = useState<EventsSummary[]>([]);
+  const [supervisorErrors, setSupervisorErrors] = useState<EventsSummary[]>([]);
   const [riskFailed, setRiskFailed] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -29,14 +84,28 @@ export default function Risk() {
 
   const fetchRejects = () => {
     getRecentEvents({ limit: 20 })
-      .then((r) => setRejects(r.events.filter((e) => e.event_type === 'risk_reject')))
+      .then((r) => setRejects(r.events.filter((e) => e.event_type === 'risk_rejected')))
       .catch(() => setRejects(PLACEHOLDER_REJECTS));
+  };
+
+  const fetchGateBlocks = () => {
+    getRecentEvents({ limit: 10 })
+      .then((r) => setGateBlocks(r.events.filter((e) => e.event_type === 'execution_gate_blocked')))
+      .catch(() => setGateBlocks(PLACEHOLDER_GATE));
+  };
+
+  const fetchSupervisorErrors = () => {
+    getRecentEvents({ limit: 10 })
+      .then((r) => setSupervisorErrors(r.events.filter((e) => e.event_type === 'supervisor_component_error')))
+      .catch(() => setSupervisorErrors(PLACEHOLDER_SUPERVISOR));
   };
 
   useEffect(() => {
     fetchRisk();
     fetchRejects();
-    const id = setInterval(() => { fetchRisk(); fetchRejects(); }, 30_000);
+    fetchGateBlocks();
+    fetchSupervisorErrors();
+    const id = setInterval(() => { fetchRisk(); fetchRejects(); fetchGateBlocks(); fetchSupervisorErrors(); }, 30_000);
     return () => clearInterval(id);
   }, []);
 
@@ -113,32 +182,21 @@ export default function Risk() {
             <div className="section-header">
               <span className="section-title">Recent Risk Rejections</span>
             </div>
-            {rejects.length === 0 ? (
-              <div className="empty-state">No risk rejections</div>
-            ) : (
-              <div className="table-scroll">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Severity</th>
-                      <th>Component</th>
-                      <th>Message</th>
-                      <th>Time</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rejects.map((e) => (
-                      <tr key={e.id}>
-                        <td><span className={severityBadge(e.severity)}>{e.severity}</span></td>
-                        <td>{e.component}</td>
-                        <td>{e.message}</td>
-                        <td>{fmtTime(e.created_at)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            <EventTable events={rejects} empty="No risk rejections" />
+          </div>
+
+          <div className="section">
+            <div className="section-header">
+              <span className="section-title">Execution Gate Blocks</span>
+            </div>
+            <EventTable events={gateBlocks} empty="No execution gate blocks" />
+          </div>
+
+          <div className="section">
+            <div className="section-header">
+              <span className="section-title">Supervisor Component Errors</span>
+            </div>
+            <EventTable events={supervisorErrors} empty="No supervisor errors" />
           </div>
         </>
       )}

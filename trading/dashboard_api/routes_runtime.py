@@ -11,7 +11,11 @@ from trading.runtime.config import AppSettings
 from trading.runtime.mode import validate_mode_transition
 from trading.runtime.state import get_live_trading_lock, get_trade_mode
 from trading.storage.db import create_database_engine, create_session_factory, init_db
-from trading.storage.repositories import EventsRepository, ExecutionRecordsRepository, ShadowExecutionRepository
+from trading.storage.repositories import (
+    EventsRepository,
+    ExecutionRecordsRepository,
+    ShadowExecutionRepository,
+)
 
 router = APIRouter(tags=["runtime"])
 
@@ -216,6 +220,8 @@ def read_runtime_status() -> RuntimeStatusResponse:
             live_trading_lock_enabled=False,
             execution_route_effective="paper",
             mode_transition_guard="transition_allowed",
+            shadow_executions_last_hour=0,
+            last_shadow_time=None,
         )
 
 

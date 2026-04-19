@@ -13,6 +13,7 @@ from trading.storage.repositories import (
     EventsRepository,
     ExecutionRecordsRepository,
     RuntimeControlRepository,
+    ShadowExecutionRepository,
 )
 
 
@@ -36,6 +37,8 @@ class TestRuntimeStatusEmptyDB:
         assert body["last_error_message"] is None
         assert body["cycles_last_hour"] == 0
         assert body["orders_last_hour"] == 0
+        assert body["shadow_executions_last_hour"] == 0
+        assert body["last_shadow_time"] is None
 
 
 class TestRuntimeStatusWithData:
@@ -425,4 +428,62 @@ class TestControlPlaneEndpoint:
         assert body["lock_enabled"] is True
         assert body["lock_reason"] == "upgrade"
         assert body["execution_route"] == "shadow"
+
+
+class TestRuntimeStatusShadowFields:
+    """Shadow execution fields are correctly populated from the database."""
+
+    def test_shadow_executions_last_hour_and_last_shadow_time(self, tmp_path, monkeypatch):
+        """When shadow executions exist, endpoint returns correct count and latest time."""
+        database_url = f"sqlite:///{tmp_path}/shadow.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        with session_factory() as session:
+            shadow_repo = ShadowExecutionRepository(session)
+            # Two shadow executions in the last hour
+            shadow_repo.record_shadow_execution(
+                symbol="BTCUSDT",
+                side="BUY",
+                planned_notional_usdt=Decimal("100"),
+                reference_price=Decimal("95000"),
+                simulated_fill_price=Decimal("95010"),
+                simulated_slippage_bps=Decimal("10"),
+                decision_reason="test",
+            )
+            shadow_repo.record_shadow_execution(
+                symbol="ETHUSDT",
+                side="BUY",
+                planned_notional_usdt=Decimal("50"),
+                reference_price=Decimal("3500"),
+                simulated_fill_price=Decimal("3503"),
+                simulated_slippage_bps=Decimal("10"),
+                decision_reason="test",
+            )
+
+        client = TestClient(app)
+        response = client.get("/runtime/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["shadow_executions_last_hour"] == 2
+        assert body["last_shadow_time"] is not None
+
+    def test_shadow_defaults_when_no_shadow_executions(self, tmp_path, monkeypatch):
+        """When no shadow executions exist, endpoint returns safe defaults."""
+        database_url = f"sqlite:///{tmp_path}/no_shadow.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+
+        client = TestClient(app)
+        response = client.get("/runtime/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["shadow_executions_last_hour"] == 0
+        assert body["last_shadow_time"] is None
+
 

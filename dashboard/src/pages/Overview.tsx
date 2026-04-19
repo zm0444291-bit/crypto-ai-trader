@@ -62,6 +62,8 @@ const PLACEHOLDER_RUNTIME: RuntimeStatus = {
   live_trading_lock_enabled: false,
   execution_route_effective: 'paper',
   mode_transition_guard: null,
+  shadow_executions_last_hour: 0,
+  last_shadow_time: null,
 };
 
 // ── Sub-components ───────────────────────────────────────────────────────────
@@ -308,6 +310,46 @@ function formatUptime(seconds: number): string {
   return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
+function ExecutionStatusBanner({ runtime }: { runtime: RuntimeStatus | null }) {
+  if (!runtime) return null;
+
+  const { trade_mode, live_trading_lock_enabled, execution_route_effective, mode_transition_guard } = runtime;
+
+  let label: string;
+  let labelClass: string;
+
+  if (live_trading_lock_enabled) {
+    label = 'Live execution blocked — lock is active';
+    labelClass = 'exec-banner-locked';
+  } else if (trade_mode === 'paper_auto' || trade_mode === 'paper') {
+    label = 'Paper execution active';
+    labelClass = 'exec-banner-paper';
+  } else if (trade_mode === 'dry_run') {
+    label = 'Dry-run mode — no real orders';
+    labelClass = 'exec-banner-dryrun';
+  } else if (trade_mode === 'live_shadow') {
+    label = 'Shadow mode — live prices, no execution';
+    labelClass = 'exec-banner-shadow';
+  } else if (mode_transition_guard && mode_transition_guard.startsWith('blocked:')) {
+    label = `Blocked: ${mode_transition_guard.replace('blocked: ', '')}`;
+    labelClass = 'exec-banner-blocked';
+  } else if (trade_mode === 'live_small_auto') {
+    label = 'Live execution active';
+    labelClass = 'exec-banner-live';
+  } else {
+    label = `Mode: ${trade_mode}`;
+    labelClass = 'exec-banner-default';
+  }
+
+  return (
+    <div className={`exec-status-banner ${labelClass}`}>
+      <span className="exec-status-dot" />
+      <span className="exec-status-label">{label}</span>
+      <span className="exec-status-route">route&nbsp;{execution_route_effective}</span>
+    </div>
+  );
+}
+
 function RuntimeSection({
   runtime,
   lastUpdated,
@@ -330,6 +372,7 @@ function RuntimeSection({
         <span className="section-title">Runtime</span>
         <LastUpdatedStamp date={lastUpdated} />
       </div>
+      <ExecutionStatusBanner runtime={runtime} />
       <div className="runtime-grid">
         <div className="metric-card">
           <div className="metric-label">Status</div>
@@ -368,6 +411,18 @@ function RuntimeSection({
           </div>
         </div>
         <div className="metric-card">
+          <div className="metric-label">Shadow / Hour</div>
+          <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
+            {display.shadow_executions_last_hour}
+          </div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Last Shadow</div>
+          <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
+            {display.last_shadow_time ? fmtTime(display.last_shadow_time) : '—'}
+          </div>
+        </div>
+        <div className="metric-card">
           <div className="metric-label">Last Error</div>
           <div className={`metric-value ${display.last_error_message ? 'negative' : (runtime ? '' : 'placeholder')}`}>
             {display.last_error_message ?? (runtime ? 'none' : '—')}
@@ -397,8 +452,11 @@ function RuntimeSection({
             {display.execution_route_effective}
           </div>
         </div>
-        <div className="notice-card">
-          Paper trading only — no real orders
+        <div className="metric-card">
+          <div className="metric-label">Mode Guard</div>
+          <div className={`metric-value ${display.mode_transition_guard && display.mode_transition_guard.startsWith('blocked') ? 'negative' : (runtime ? '' : 'placeholder')}`}>
+            {display.mode_transition_guard ?? (runtime ? '—' : '—')}
+          </div>
         </div>
       </div>
     </div>
