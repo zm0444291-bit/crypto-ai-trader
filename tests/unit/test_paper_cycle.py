@@ -1,10 +1,12 @@
 """Unit tests for the paper trading cycle orchestrator."""
 
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 from trading.ai.schemas import AIScoreResult
+from trading.execution.gate import LiveTradingLock
 from trading.execution.paper_executor import PaperFill, PaperOrder
 from trading.runtime.paper_cycle import CycleInput, run_paper_cycle
 from trading.strategies.base import TradeCandidate
@@ -118,6 +120,21 @@ class FakeExecRepo:
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
+# Shared fake lock for paper_auto mode tests
+_PAPER_LOCK = LiveTradingLock()
+
+
+@contextmanager
+def _paper_auto_patches():
+    """Patch get_trade_mode and get_live_trading_lock for paper_auto mode."""
+    with patch(
+        "trading.runtime.paper_cycle.get_trade_mode", return_value="paper_auto"
+    ), patch(
+        "trading.runtime.paper_cycle.get_live_trading_lock", return_value=_PAPER_LOCK
+    ):
+        yield
+
+
 def test_no_signal_path_returns_no_signal_and_no_execution():
     """When generate_momentum_candidate returns None, status is no_signal."""
     input_data = make_input()
@@ -140,14 +157,19 @@ def test_no_signal_path_returns_no_signal_and_no_execution():
         "trading.runtime.paper_cycle.CandlesRepository",
         return_value=fake_repo,
     ):
-        result = run_paper_cycle(
-            input_data,
-            events_repo=events_repo,
-            exec_repo=exec_repo,
-            executor=executor,
-            ai_scorer=ai_scorer,
-            session_factory=factory,
-        )
+        with patch("trading.runtime.paper_cycle.get_trade_mode", return_value="paper_auto"):
+            with patch(
+                "trading.runtime.paper_cycle.get_live_trading_lock",
+                return_value=_PAPER_LOCK,
+            ):
+                result = run_paper_cycle(
+                    input_data,
+                    events_repo=events_repo,
+                    exec_repo=exec_repo,
+                    executor=executor,
+                    ai_scorer=ai_scorer,
+                    session_factory=factory,
+                )
 
     assert result.status == "no_signal"
     assert result.candidate_present is False
@@ -193,14 +215,15 @@ def test_risk_rejection_path_kill_switch():
             "trading.runtime.paper_cycle.generate_momentum_candidate",
             return_value=make_candidate(),
         ):
-            result = run_paper_cycle(
-                input_data,
-                events_repo=events_repo,
-                exec_repo=exec_repo,
-                executor=executor,
-                ai_scorer=ai_scorer,
-                session_factory=factory,
-            )
+            with _paper_auto_patches():
+                result = run_paper_cycle(
+                        input_data,
+                        events_repo=events_repo,
+                        exec_repo=exec_repo,
+                        executor=executor,
+                        ai_scorer=ai_scorer,
+                        session_factory=factory,
+                    )
 
     assert result.status == "risk_rejected"
     assert result.candidate_present is True
@@ -243,14 +266,15 @@ def test_ai_fail_closed_rejection_path():
             "trading.runtime.paper_cycle.generate_momentum_candidate",
             return_value=make_candidate(),
         ):
-            result = run_paper_cycle(
-                input_data,
-                events_repo=events_repo,
-                exec_repo=exec_repo,
-                executor=executor,
-                ai_scorer=ai_scorer,
-                session_factory=factory,
-            )
+            with _paper_auto_patches():
+                result = run_paper_cycle(
+                        input_data,
+                        events_repo=events_repo,
+                        exec_repo=exec_repo,
+                        executor=executor,
+                        ai_scorer=ai_scorer,
+                        session_factory=factory,
+                    )
 
     assert result.status == "ai_rejected"
     assert result.candidate_present is True
@@ -295,14 +319,15 @@ def test_ai_low_score_rejected():
             "trading.runtime.paper_cycle.generate_momentum_candidate",
             return_value=make_candidate(),
         ):
-            result = run_paper_cycle(
-                input_data,
-                events_repo=events_repo,
-                exec_repo=exec_repo,
-                executor=executor,
-                ai_scorer=ai_scorer,
-                session_factory=factory,
-            )
+            with _paper_auto_patches():
+                result = run_paper_cycle(
+                        input_data,
+                        events_repo=events_repo,
+                        exec_repo=exec_repo,
+                        executor=executor,
+                        ai_scorer=ai_scorer,
+                        session_factory=factory,
+                    )
 
     assert result.status == "ai_rejected"
     assert result.order_executed is False
@@ -364,14 +389,15 @@ def test_successful_execution_with_persisted_order_and_fill():
             "trading.runtime.paper_cycle.generate_momentum_candidate",
             return_value=make_candidate(),
         ):
-            result = run_paper_cycle(
-                input_data,
-                events_repo=events_repo,
-                exec_repo=exec_repo,
-                executor=executor,
-                ai_scorer=ai_scorer,
-                session_factory=factory,
-            )
+            with _paper_auto_patches():
+                result = run_paper_cycle(
+                        input_data,
+                        events_repo=events_repo,
+                        exec_repo=exec_repo,
+                        executor=executor,
+                        ai_scorer=ai_scorer,
+                        session_factory=factory,
+                    )
 
     assert result.status == "executed"
     assert result.candidate_present is True
@@ -447,14 +473,15 @@ def test_position_size_rejection_stops_before_execution():
             "trading.runtime.paper_cycle.generate_momentum_candidate",
             return_value=bad_candidate,
         ):
-            result = run_paper_cycle(
-                input_data,
-                events_repo=events_repo,
-                exec_repo=exec_repo,
-                executor=executor,
-                ai_scorer=ai_scorer,
-                session_factory=factory,
-            )
+            with _paper_auto_patches():
+                result = run_paper_cycle(
+                        input_data,
+                        events_repo=events_repo,
+                        exec_repo=exec_repo,
+                        executor=executor,
+                        ai_scorer=ai_scorer,
+                        session_factory=factory,
+                    )
 
     assert result.status == "size_rejected"
     assert result.candidate_present is True

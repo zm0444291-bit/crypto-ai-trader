@@ -58,6 +58,10 @@ const PLACEHOLDER_RUNTIME: RuntimeStatus = {
   uptime_seconds: null,
   last_heartbeat_time: null,
   last_component_error: null,
+  trade_mode: 'paper_auto',
+  live_trading_lock_enabled: false,
+  execution_route_effective: 'paper',
+  mode_transition_guard: null,
 };
 
 // ── Sub-components ───────────────────────────────────────────────────────────
@@ -374,6 +378,27 @@ function RuntimeSection({
           <div className={`metric-value ${display.last_component_error ? 'negative' : (runtime ? '' : 'placeholder')}`}>
             {display.last_component_error ?? (runtime ? 'none' : '—')}
           </div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Trade Mode</div>
+          <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
+            {display.trade_mode}
+          </div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Live Lock</div>
+          <div className={`metric-value ${display.live_trading_lock_enabled ? 'negative' : (runtime ? '' : 'placeholder')}`}>
+            {display.live_trading_lock_enabled ? 'ON' : 'OFF'}
+          </div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Execution Route</div>
+          <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
+            {display.execution_route_effective}
+          </div>
+        </div>
+        <div className="notice-card">
+          Paper trading only — no real orders
         </div>
       </div>
     </div>

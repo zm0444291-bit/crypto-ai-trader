@@ -70,6 +70,10 @@ export interface RuntimeStatus {
   uptime_seconds: number | null;
   last_heartbeat_time: string | null;
   last_component_error: string | null;
+  trade_mode: string;
+  live_trading_lock_enabled: boolean;
+  execution_route_effective: string;
+  mode_transition_guard: string | null;
 }
 
 // ── Fetch helper ──────────────────────────────────────────────────────────────

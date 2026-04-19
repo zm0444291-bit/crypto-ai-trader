@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from trading.ai.scorer import AIScorer
+from trading.execution.gate import ExecutionGate
 from trading.execution.paper_executor import PaperExecutionResult, PaperExecutor
 from trading.features.builder import CandleFeatures, build_features
 from trading.risk.position_sizing import PositionSizeResult, calculate_position_size
@@ -24,6 +25,7 @@ from trading.risk.pre_trade import (
     evaluate_pre_trade_risk,
 )
 from trading.risk.profiles import select_risk_profile
+from trading.runtime.state import get_live_trading_lock, get_trade_mode
 from trading.storage.repositories import (
     CandlesRepository,
     EventsRepository,
@@ -348,7 +350,51 @@ def run_paper_cycle(
             event_ids=event_ids,
         )
 
-    # ── Stage 8: paper execution ─────────────────────────────────────────────
+    # ── Stage 8: execution gate ──────────────────────────────────────────────
+    gate = ExecutionGate()
+    mode = get_trade_mode()
+    lock = get_live_trading_lock()
+    gate_decision = gate.decide(
+        mode=mode,
+        lock=lock,
+        risk_approved=pre_trade.approved,
+        kill_switch_enabled=input_data.kill_switch_enabled,
+        candidate_symbol=candidate.symbol,
+    )
+
+    if not gate_decision.allowed:
+        reject_reasons = [f"execution_gate:{gate_decision.reason}"]
+        events_repo.record_event(
+            event_type="execution_gate_blocked",
+            severity="warning",
+            component="paper_cycle",
+            message=f"Execution gate blocked {input_data.symbol}: {gate_decision.reason}",
+            context={
+                "mode": gate_decision.mode,
+                "route": gate_decision.route,
+                "reason": gate_decision.reason,
+            },
+        )
+        finished = events_repo.record_event(
+            event_type="cycle_finished",
+            severity="info",
+            component="paper_cycle",
+            message=f"Cycle blocked by execution gate for {input_data.symbol}",
+            context={"status": "gate_blocked", "reject_reasons": reject_reasons},
+        )
+        event_ids.append(finished.id)
+        return CycleResult(
+            symbol=input_data.symbol,
+            status="gate_blocked",
+            candidate_present=candidate_present,
+            ai_decision=ai_decision,
+            risk_state=risk_state,
+            order_executed=False,
+            reject_reasons=reject_reasons,
+            event_ids=event_ids,
+        )
+
+    # ── Stage 9: paper execution ─────────────────────────────────────────────
     exec_result: PaperExecutionResult = executor.execute_market_buy(
         candidate=candidate,
         position_size=size_result,
@@ -356,7 +402,7 @@ def run_paper_cycle(
         executed_at=input_data.now,
     )
 
-    # ── Stage 9: persist order/fill ─────────────────────────────────────────
+    # ── Stage 10: persist order/fill ─────────────────────────────────────────
     if exec_result.approved and exec_result.order is not None and exec_result.fill is not None:
         exec_repo.record_paper_execution(
             order=exec_result.order,
@@ -379,11 +425,12 @@ def run_paper_cycle(
                 "price": str(exec_result.fill.price),
                 "fee_usdt": str(exec_result.fill.fee_usdt),
                 "notional": str(exec_result.order.requested_notional_usdt),
+                "execution_route": gate_decision.route,
             },
         )
         event_ids.append(executed_ev.id)
 
-    # ── Stage 10: cycle_finished ─────────────────────────────────────────────
+    # ── Stage 11: cycle_finished ─────────────────────────────────────────────
     finished = events_repo.record_event(
         event_type="cycle_finished",
         severity="info",

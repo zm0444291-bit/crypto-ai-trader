@@ -584,3 +584,18 @@ body {
   color: var(--accent);
   line-height: 1.5;
 }
+
+/* ── Notice card ────────────────────────────────────────────────────────── */
+.notice-card {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  background: rgba(0, 212, 170, 0.06);
+  border: 1px solid rgba(0, 212, 170, 0.2);
+  border-radius: var(--r);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--accent);
+}

@@ -6,7 +6,10 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from trading.execution.gate import compute_execution_route
 from trading.runtime.config import AppSettings
+from trading.runtime.mode import validate_mode_transition
+from trading.runtime.state import get_live_trading_lock, get_trade_mode
 from trading.storage.db import create_database_engine, create_session_factory, init_db
 from trading.storage.repositories import EventsRepository, ExecutionRecordsRepository
 
@@ -34,6 +37,11 @@ class RuntimeStatusResponse(BaseModel):
     uptime_seconds: int | None
     last_heartbeat_time: str | None
     last_component_error: str | None
+    # Execution control plane fields
+    trade_mode: str
+    live_trading_lock_enabled: bool
+    execution_route_effective: str
+    mode_transition_guard: str | None
 
 
 @router.get("/runtime/status", response_model=RuntimeStatusResponse)
@@ -61,6 +69,10 @@ def read_runtime_status() -> RuntimeStatusResponse:
             uptime_seconds=None,
             last_heartbeat_time=None,
             last_component_error=None,
+            trade_mode="paper_auto",
+            live_trading_lock_enabled=False,
+            execution_route_effective="paper",
+            mode_transition_guard="transition_allowed",
         )
 
     now = datetime.now(UTC)
@@ -144,6 +156,15 @@ def read_runtime_status() -> RuntimeStatusResponse:
                     last_component_error = e.message
                     break
 
+        current_mode = get_trade_mode()
+        lock_state = get_live_trading_lock()
+        transition_guard = validate_mode_transition(
+            current_mode,
+            "live_small_auto",
+            lock_enabled=lock_state.enabled,
+            allow_live_unlock=False,
+        )
+
         return RuntimeStatusResponse(
             last_cycle_status=last_cycle_status,
             last_cycle_time=last_cycle_time,
@@ -156,6 +177,10 @@ def read_runtime_status() -> RuntimeStatusResponse:
             uptime_seconds=uptime_seconds,
             last_heartbeat_time=last_heartbeat_time,
             last_component_error=last_component_error,
+            trade_mode=current_mode,
+            live_trading_lock_enabled=lock_state.enabled,
+            execution_route_effective=compute_execution_route(current_mode),
+            mode_transition_guard=transition_guard.reason,
         )
 
     except Exception:
@@ -171,4 +196,8 @@ def read_runtime_status() -> RuntimeStatusResponse:
             uptime_seconds=None,
             last_heartbeat_time=None,
             last_component_error=None,
+            trade_mode="paper_auto",
+            live_trading_lock_enabled=False,
+            execution_route_effective="paper",
+            mode_transition_guard="transition_allowed",
         )
