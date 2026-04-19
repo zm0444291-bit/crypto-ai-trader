@@ -1,139 +1,82 @@
-# Claude Code Task: Milestone 6.1 Local Dashboard Frontend Skeleton
+# Claude Code Repair Task: Dashboard Local Connectivity And UI Compliance
 
 You are the implementation worker for `/Users/zihanma/Desktop/crypto-ai-trader`.
 
-Your job is to build the first local Dashboard frontend skeleton. Keep the work small, safe, and reviewable. This is a UI/read-only visibility task only.
+This is a repair task for commit `8c04866 feat: add local dashboard skeleton`. Keep the patch small and focused. Do not start a new feature.
+
+## Problems To Fix
+
+1. The Vite dashboard runs from `http://127.0.0.1:5173`, but the FastAPI backend runs from `http://127.0.0.1:8000`. The frontend uses absolute `fetch("http://127.0.0.1:8000/...")`, and `trading/main.py` does not configure CORS. In a real browser, the Dashboard will fail to read backend APIs even though `npm run build` passes.
+2. The Dashboard claims fallback/placeholder behavior, but when the backend is unavailable it mostly renders dashes and empty tables, not meaningful placeholder operational data.
+3. The Dashboard styling violates the visual constraints from the task: the current palette is dominated by dark blue/slate colors, and CSS uses nonzero `letter-spacing`.
+4. `.omc/` is currently untracked after the Claude Code run. It should be ignored so future reviews start from a clean worktree.
 
 ## Read First
 
-Read these files before editing:
-
-- `README.md`
-- `docs/claude-collaboration.md`
-- `docs/superpowers/specs/2026-04-19-crypto-ai-trader-design.md`
+- `docs/claude-tasks/current-task.md`
+- `docs/claude-tasks/last-result.md`
 - `trading/main.py`
-- `trading/dashboard_api/routes_health.py`
-- `trading/dashboard_api/routes_market_data.py`
-- `trading/dashboard_api/routes_orders.py`
-- `trading/dashboard_api/routes_risk.py`
-- `trading/dashboard_api/routes_portfolio.py`
-- `trading/dashboard_api/routes_events.py`
-- Existing tests under `tests/integration/`
-
-## Current Backend APIs Available
-
-The Dashboard should consume these read-only endpoints:
-
-- `GET /health`
-- `GET /market-data/status`
-- `GET /risk/status?day_start_equity=500&current_equity=500`
-- `GET /portfolio/status?initial_cash_usdt=500`
-- `GET /orders/recent`
-- `GET /events/recent`
-
-Do not add order placement, live trading controls, API key forms, private Binance calls, or any endpoint that can execute a trade.
-
-## Goal
-
-Create a Vite + React + TypeScript local Dashboard app under `dashboard/`.
-
-The first screen should be the actual control room, not a marketing page. It should show a clear local trading operations dashboard using mocked/fallback data when the backend is not running, and real API data when the backend is available.
-
-The UI must prioritize:
-
-- Safety status
-- Risk state
-- Paper portfolio visibility
-- Recent orders
-- Recent system/risk events
-- Obvious read-only mode
-
-## Files To Create
-
-Create a small frontend app:
-
-- `dashboard/package.json`
-- `dashboard/index.html`
-- `dashboard/tsconfig.json`
-- `dashboard/vite.config.ts`
-- `dashboard/src/main.tsx`
+- `tests/integration/test_app_smoke.py`
 - `dashboard/src/App.tsx`
 - `dashboard/src/api/client.ts`
 - `dashboard/src/styles.css`
-- `dashboard/README.md`
+- `.gitignore`
 
-You may add a small number of extra component files if it keeps `App.tsx` readable, but avoid over-engineering.
+## Required Fixes
 
-## Required Product Behavior
+### 1. Add Local CORS Support
 
-The Dashboard should render:
+In `trading/main.py`, configure FastAPI with `CORSMiddleware`.
 
-1. Top-level title: `Trading Control Room`
-2. A clearly visible status strip showing:
-   - trade mode
-   - live trading enabled/disabled
-   - risk state
-   - risk profile
-3. Main metrics:
-   - account equity
-   - cash balance
-   - today PnL percent
-   - max trade risk USDT
-4. Positions section:
-   - symbol
-   - qty
-   - average entry
-   - market value
-   - unrealized PnL
-5. Recent orders section:
-   - symbol
-   - side
-   - status
-   - requested notional
-   - created time
-6. Recent events section:
-   - severity
-   - component
-   - event type
-   - message
-   - created time
-7. Safety banner that says this build is read-only and paper-mode oriented.
+Allow only local dashboard development origins:
 
-When API calls fail, show a calm fallback state instead of a blank screen. The fallback must make it obvious that data is placeholder/offline.
+- `http://127.0.0.1:5173`
+- `http://localhost:5173`
 
-## Visual Direction
+Do not use wildcard `"*"` origins.
 
-Make it beautiful but restrained:
+Add or update integration tests to prove CORS behavior:
 
-- No landing page.
-- No card-inside-card layouts.
-- No purple/purple-blue dominant gradients.
-- No beige/cream/sand/tan, brown/orange/espresso, or dark blue/slate dominant theme.
-- Use a crisp professional quant terminal/control-room feeling with a balanced palette.
-- Use only modest radius: 8px or less.
-- Text must not overflow on mobile.
-- Layout must work on desktop and mobile.
-- Do not use decorative orbs/blob backgrounds.
-- Use clear data hierarchy and strong spacing.
+- An OPTIONS preflight request from `http://127.0.0.1:5173` to `/health` returns the expected CORS allow-origin header.
+- A request from an unapproved origin does not receive that allow-origin header.
 
-Because this is a dashboard/tool, images are not required. Do not fetch remote assets.
+### 2. Add Real Offline Placeholder Data
 
-## API Client Requirements
+When the backend is unavailable, the Dashboard should still render a useful offline preview with explicit placeholder values, not only dashes.
 
-In `dashboard/src/api/client.ts`:
+Requirements:
 
-- Use `fetch`.
-- Base URL should default to `http://127.0.0.1:8000`.
-- Allow override with `VITE_API_BASE_URL`.
-- Provide typed functions:
-  - `getHealth()`
-  - `getMarketDataStatus()`
-  - `getRiskStatus()`
-  - `getPortfolioStatus()`
-  - `getRecentOrders()`
-  - `getRecentEvents()`
-- Keep types local and simple.
-- Fail gracefully by throwing useful errors for the caller to catch.
+- Keep the offline notice visible when any primary API call fails.
+- Show placeholder/fallback values for:
+  - mode: `paper_auto`
+  - live trading: disabled
+  - risk state: normal
+  - profile: small_balanced
+  - account equity: 500
+  - cash balance: 500
+  - today PnL: 0
+  - max trade risk: 7.5
+- Show at least one placeholder event stating that the backend is offline and placeholder data is being displayed.
+- Do not show fake orders or fake open positions unless they are clearly marked as placeholder. Prefer no fake positions and no fake orders.
+
+### 3. Make CSS Comply With Visual Constraints
+
+Update `dashboard/src/styles.css`:
+
+- Avoid a dominant dark blue/slate theme. Use a neutral dark graphite/black base with balanced green/cyan/red accents.
+- Set all `letter-spacing` values to `0`.
+- Keep border radius at `8px` or less.
+- Keep the dashboard readable on mobile.
+
+### 4. Ignore Claude Local State
+
+Update `.gitignore` to include:
+
+```gitignore
+.omc/
+```
+
+Do not commit `.omc/`.
 
 ## Safety Rules
 
@@ -144,44 +87,36 @@ Do not implement:
 - Binance private endpoints
 - API key handling
 - Secret storage
-- Kill-switch behavior that changes backend state
 - Any POST/PUT/PATCH/DELETE trading control endpoint
 - Any bypass of RiskEngine/ExecutionGate/LiveTradingLock
 
-This task is frontend visibility only.
+This repair must remain dashboard visibility and local connectivity only.
 
-## Testing / Verification
+## Verification
 
-Prefer lightweight verification that works in a fresh local project.
-
-At minimum:
+Run:
 
 ```bash
 cd dashboard
-npm install
 npm run build
-```
-
-Then from project root:
-
-```bash
+cd ..
 .venv/bin/ruff check .
 .venv/bin/pytest -q
 git status --short
 ```
 
-If Node/npm is not available, do not fake success. Record the blocker in `docs/claude-tasks/last-result.md`.
+The final `git status --short` should not show `.omc/`.
 
 ## Commit
 
-If verification passes, commit only the relevant files:
+If verification passes:
 
 ```bash
-git add dashboard docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
-git commit -m "feat: add local dashboard skeleton"
+git add .gitignore trading/main.py tests dashboard docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
+git commit -m "fix: repair dashboard local connectivity"
 ```
 
-Do not commit unrelated local files.
+Do not commit `dashboard/dist`, `dashboard/node_modules`, `.omc/`, or unrelated files.
 
 ## Completion Report
 
@@ -190,7 +125,7 @@ Write `docs/claude-tasks/last-result.md` with:
 ```text
 # Last Claude Code Result
 
-Task: Milestone 6.1 Local Dashboard Frontend Skeleton
+Task: Dashboard Local Connectivity And UI Compliance Repair
 Status: completed | failed
 
 Files changed:

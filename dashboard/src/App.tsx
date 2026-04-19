@@ -16,12 +16,12 @@ import {
 
 function riskDot(state: string): string {
   switch (state) {
-    case 'normal':          return 'dot-normal';
-    case 'degraded':        return 'dot-degraded';
-    case 'no_new_positions':return 'dot-no-new';
-    case 'global_pause':     return 'dot-global';
-    case 'emergency_stop':  return 'dot-emergency';
-    default:                return 'dot-disabled';
+    case 'normal':           return 'dot-normal';
+    case 'degraded':         return 'dot-degraded';
+    case 'no_new_positions': return 'dot-no-new';
+    case 'global_pause':      return 'dot-global';
+    case 'emergency_stop':    return 'dot-emergency';
+    default:                 return 'dot-disabled';
   }
 }
 
@@ -62,6 +62,36 @@ function fmtTime(iso: string): string {
   }
 }
 
+// ── Placeholder data ──────────────────────────────────────────────────────────
+
+const PLACEHOLDER_RISK: RiskStatus = {
+  day_start_equity: '500',
+  current_equity: '500',
+  risk_profile: { name: 'small_balanced' },
+  risk_state: 'normal',
+  daily_pnl_pct: '0',
+  max_trade_risk_usdt: '7.5',
+  reason: 'placeholder — backend offline',
+};
+
+const PLACEHOLDER_PORTFOLIO: PortfolioStatus = {
+  cash_balance_usdt: '500',
+  total_equity_usdt: '500',
+  unrealized_pnl_usdt: '0',
+  positions: [],
+};
+
+const PLACEHOLDER_EVENTS: EventsSummary[] = [
+  {
+    id: -1,
+    event_type: 'backend_unavailable',
+    severity: 'warning',
+    component: 'dashboard',
+    message: 'Backend offline — placeholder data shown',
+    created_at: new Date().toISOString(),
+  },
+];
+
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 function SafetyBanner() {
@@ -88,62 +118,92 @@ function OfflineNotice() {
   );
 }
 
-function StatusStrip({ health, risk }: { health: HealthStatus | null; risk: RiskStatus | null }) {
-  const offline = !health && !risk;
+function StatusStrip({
+  health,
+  risk,
+  isOffline,
+}: {
+  health: HealthStatus | null;
+  risk: RiskStatus | null;
+  isOffline: boolean;
+}) {
+  const displayRisk = isOffline ? PLACEHOLDER_RISK : risk;
   return (
     <div className="status-strip">
       <div className="status-pill">
         <span className="label">Mode</span>
-        <span className="value">{health?.trade_mode ?? '—'}</span>
+        <span className="value">
+          {health?.trade_mode ?? (isOffline ? 'paper_auto' : '—')}
+        </span>
       </div>
       <div className="status-pill">
         <span className="label">Live Trading</span>
         <span className="value">
           {health
             ? health.live_trading_enabled ? 'Enabled' : 'Disabled'
-            : '—'}
+            : (isOffline ? 'Disabled' : '—')}
         </span>
       </div>
       <div className="status-pill">
-        <span className={`dot ${risk ? riskDot(risk.risk_state) : 'dot-disabled'}`} />
+        <span className={`dot ${displayRisk ? riskDot(displayRisk.risk_state) : (isOffline ? 'dot-placeholder' : 'dot-disabled')}`} />
         <span className="label">Risk State</span>
-        <span className="value">{risk?.risk_state ?? (offline ? '—' : 'normal')}</span>
+        <span className="value">{displayRisk?.risk_state ?? (isOffline ? 'normal' : '—')}</span>
       </div>
       <div className="status-pill">
         <span className="label">Profile</span>
-        <span className="value">{risk?.risk_profile.name ?? '—'}</span>
+        <span className="value">{displayRisk?.risk_profile.name ?? (isOffline ? 'small_balanced' : '—')}</span>
       </div>
     </div>
   );
 }
 
-function MetricsGrid({ portfolio, risk }: { portfolio: PortfolioStatus | null; risk: RiskStatus | null }) {
-  const equity    = portfolio?.total_equity_usdt ?? null;
-  const cash      = portfolio?.cash_balance_usdt ?? null;
-  const pnlPct    = risk?.daily_pnl_pct ?? null;
-  const maxRisk   = risk?.max_trade_risk_usdt ?? null;
+function MetricsGrid({
+  portfolio,
+  risk,
+  isOffline,
+}: {
+  portfolio: PortfolioStatus | null;
+  risk: RiskStatus | null;
+  isOffline: boolean;
+}) {
+  const displayPortfolio = isOffline ? PLACEHOLDER_PORTFOLIO : portfolio;
+  const displayRisk      = isOffline ? PLACEHOLDER_RISK : risk;
+
+  const equity   = displayPortfolio?.total_equity_usdt ?? null;
+  const cash      = displayPortfolio?.cash_balance_usdt ?? null;
+  const pnlPct    = displayRisk?.daily_pnl_pct ?? null;
+  const maxRisk   = displayRisk?.max_trade_risk_usdt ?? null;
 
   const pnlClass = pnlPct !== null
     ? (parseFloat(pnlPct) >= 0 ? 'positive' : 'negative')
+    : isOffline ? 'placeholder'
     : '';
 
   return (
     <div className="metrics-grid">
       <div className="metric-card">
         <div className="metric-label">Account Equity</div>
-        <div className="metric-value">{equity !== null ? `$${fmtNum(equity)}` : '—'}</div>
+        <div className={`metric-value ${isOffline && equity === null ? 'placeholder' : ''}`}>
+          {equity !== null ? `$${fmtNum(equity)}` : (isOffline ? '$500.00' : '—')}
+        </div>
       </div>
       <div className="metric-card">
         <div className="metric-label">Cash Balance</div>
-        <div className="metric-value">{cash !== null ? `$${fmtNum(cash)}` : '—'}</div>
+        <div className={`metric-value ${isOffline && cash === null ? 'placeholder' : ''}`}>
+          {cash !== null ? `$${fmtNum(cash)}` : (isOffline ? '$500.00' : '—')}
+        </div>
       </div>
       <div className="metric-card">
         <div className="metric-label">Today PnL</div>
-        <div className={`metric-value ${pnlClass}`}>{pnlPct !== null ? fmtPct(pnlPct) : '—'}</div>
+        <div className={`metric-value ${pnlClass}`}>
+          {pnlPct !== null ? fmtPct(pnlPct) : (isOffline ? '+0.00%' : '—')}
+        </div>
       </div>
       <div className="metric-card">
         <div className="metric-label">Max Trade Risk</div>
-        <div className="metric-value">{maxRisk !== null ? `$${fmtNum(maxRisk)}` : '—'}</div>
+        <div className={`metric-value ${isOffline && maxRisk === null ? 'placeholder' : ''}`}>
+          {maxRisk !== null ? `$${fmtNum(maxRisk)}` : (isOffline ? '$7.50' : '—')}
+        </div>
       </div>
     </div>
   );
@@ -231,13 +291,22 @@ function OrdersSection({ orders }: { orders: OrderSummary[] | null }) {
   );
 }
 
-function EventsSection({ events }: { events: EventsSummary[] | null }) {
+function EventsSection({
+  events,
+  isPlaceholder = false,
+}: {
+  events: EventsSummary[] | null;
+  isPlaceholder?: boolean;
+}) {
+  const displayEvents = isPlaceholder ? PLACEHOLDER_EVENTS : (events ?? null);
+
   return (
     <div className="section">
       <div className="section-header">
         <span className="section-title">Recent Events</span>
+        {isPlaceholder && <span className="placeholder-tag">placeholder</span>}
       </div>
-      {events === null || events.length === 0 ? (
+      {displayEvents === null || displayEvents.length === 0 ? (
         <div className="empty-state">No recent events</div>
       ) : (
         <div className="table-scroll">
@@ -252,7 +321,7 @@ function EventsSection({ events }: { events: EventsSummary[] | null }) {
               </tr>
             </thead>
             <tbody>
-              {events.map((e) => (
+              {displayEvents.map((e) => (
                 <tr key={e.id}>
                   <td><span className={severityBadge(e.severity)}>{e.severity}</span></td>
                   <td>{e.component}</td>
@@ -272,7 +341,7 @@ function EventsSection({ events }: { events: EventsSummary[] | null }) {
 // ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [health,   setHealth]   = useState<HealthStatus | null>(null);
+  const [health,    setHealth]    = useState<HealthStatus | null>(null);
   const [risk,      setRisk]      = useState<RiskStatus | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioStatus | null>(null);
   const [orders,    setOrders]    = useState<OrderSummary[] | null>(null);
@@ -312,12 +381,12 @@ export default function App() {
 
       {offline && <OfflineNotice />}
 
-      <StatusStrip health={health} risk={risk} />
+      <StatusStrip health={health} risk={risk} isOffline={offline} />
 
-      <MetricsGrid portfolio={portfolio} risk={risk} />
+      <MetricsGrid portfolio={portfolio} risk={risk} isOffline={offline} />
       <PositionsSection positions={portfolio?.positions ?? null} />
       <OrdersSection orders={orders} />
-      <EventsSection events={events} />
+      <EventsSection events={events} isPlaceholder={offline} />
     </div>
   );
 }

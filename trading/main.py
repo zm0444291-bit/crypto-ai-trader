@@ -1,6 +1,7 @@
 from collections.abc import Callable
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from trading.dashboard_api.routes_events import router as events_router
@@ -12,6 +13,13 @@ from trading.dashboard_api.routes_risk import router as risk_router
 from trading.storage.repositories import EventsRepository
 
 app = FastAPI(title="Crypto AI Trader")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
 app.include_router(events_router)
 app.include_router(health_router)
 app.include_router(market_data_router)

@@ -30,3 +30,6 @@ build/
 
 # Superpowers visual companion
 .superpowers/
+
+# Claude Code local state
+.omc/

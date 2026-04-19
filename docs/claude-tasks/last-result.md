@@ -1,30 +1,25 @@
 # Last Claude Code Result
 
-Task: Milestone 6.1 Local Dashboard Frontend Skeleton
+Task: Dashboard Local Connectivity And UI Compliance Repair
 Status: completed
 
 Files changed:
-- dashboard/package.json (new)
-- dashboard/index.html (new)
-- dashboard/tsconfig.json (new)
-- dashboard/vite.config.ts (new)
-- dashboard/src/main.tsx (new)
-- dashboard/src/App.tsx (new)
-- dashboard/src/api/client.ts (new)
-- dashboard/src/styles.css (new)
-- dashboard/README.md (new)
-- dashboard/src/vite-env.d.ts (new)
+- trading/main.py (CORS middleware added)
+- tests/integration/test_app_smoke.py (3 new CORS tests)
+- dashboard/src/App.tsx (real offline placeholder data)
+- dashboard/src/styles.css (neutral dark palette, letter-spacing: 0)
+- .gitignore (.omc/ added)
 - docs/claude-tasks/last-result.md (updated)
 
 Verification:
-- `cd dashboard && npm install` — succeeded (67 packages)
-- `npm run build` — succeeded (tsc + vite build, 272ms)
+- `cd dashboard && npm run build` — succeeded (tsc + vite build, 245ms)
 - `ruff check .` — all checks passed
-- `pytest -q` — 145 passed in 0.43s
+- `pytest -q` — 148 passed in 0.39s
+- `git status --short` — no .omc/ in output
 
 Commit:
-- `git add dashboard docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md`
-- `git commit -m "feat: add local dashboard skeleton"`
+- `git add .gitignore trading/main.py tests dashboard docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md`
+- `git commit -m "fix: repair dashboard local connectivity"`
 
 Safety:
 - No order execution added.
@@ -34,7 +29,7 @@ Safety:
 - Dashboard remains read-only.
 
 Notes:
-- Dashboard shows offline/fallback state when backend is not running.
-- Visual direction: professional quant terminal dark theme with cyan accent, 6px radius, no decorative blobs.
-- All 6 required sections rendered: status strip, metrics, positions, orders, events, safety banner.
-- Graceful degradation via `catch(() => {})` on all API calls.
+- CORS: FastAPI CORSMiddleware allows http://127.0.0.1:5173 and http://localhost:5173 only, GET methods only.
+- Offline placeholders: paper_auto / Disabled / normal / small_balanced / $500 equity / $500 cash / +0.00% PnL / $7.50 max risk + placeholder event.
+- CSS: neutral dark graphite (#0D0D0D) base, all letter-spacing set to 0.
+- .omc/ added to .gitignore.
