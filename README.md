@@ -112,7 +112,7 @@ make runtime-loop
 
 The backend CORS whitelist is set to `http://127.0.0.1:5173` and `http://localhost:5173`. If you access the dashboard on a different port or hostname, the API requests are blocked.
 
-Fix: Only access the dashboard at `http://localhost:5173` (or the port shown in the Vite output).
+Fix: Use the exact URL shown in the Vite output — both `http://127.0.0.1:5173` and `http://localhost:5173` are valid origins as long as they match what Vite printed at startup.
 
 ### Port conflicts (8000 or 5173 already in use)
 

@@ -307,7 +307,40 @@ class TestRunSupervisor:
         # Supervisor must have waited for ingestion to stop before re-raising
         assert "ingest_stopped" in call_order
 
+    def test_stop_set_called_when_component_crashes(self):
+        """When a component crashes, stop.set() is called so the other loop exits promptly."""
+        import time
 
+        def fake_ingest_loop(**kwargs):
+            # Without stop.set(), this 1-second wait would time out and the test
+            # would take ~1s longer than necessary. With stop.set(), it returns
+            # immediately.
+            kwargs["stop_event"].wait(timeout=1)
+
+        def fake_run_loop(**kwargs):
+            raise RuntimeError("trading crashed")
+
+        start = time.monotonic()
+        with patch(
+            "trading.runtime.supervisor.ingest_loop", side_effect=fake_ingest_loop
+        ):
+            with patch("trading.runtime.supervisor.run_loop", side_effect=fake_run_loop):
+                with pytest.raises(RuntimeError, match="trading crashed"):
+                    run_supervisor(
+                        session_factory=make_session_factory(),
+                        ai_scorer=FakeAIScorer(),
+                        ingest_interval=300,
+                        trade_interval=300,
+                    )
+        elapsed = time.monotonic() - start
+
+        # If stop.set() was NOT called, ingest_loop waits the full 1s timeout.
+        # If stop.set() WAS called, ingest_loop returns immediately (~0ms).
+        # We assert elapsed < 0.5s to prove stop was set promptly.
+        assert elapsed < 0.5, (
+            f"Test took {elapsed:.2f}s — stop.set() may not have been called. "
+            "Ingestion would have waited 1s for the stop signal."
+        )
 class TestSupervisorCLI:
     """CLI correctly parses --supervisor and related flags."""
 

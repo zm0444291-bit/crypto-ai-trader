@@ -1,120 +1,100 @@
-# Claude Code Task: Unified Local Supervisor (Ingestion + Trading Loops)
+# Claude Code Task: Fix Supervisor Crash Propagation + Docs Consistency
 
 You are the implementation worker for `/Users/zihanma/Desktop/crypto-ai-trader`.
 
 ## Goal
 
-Create a single local supervisor that can run both:
-1) market data ingestion loop
-2) paper trading runtime loop
+Fix a high-risk supervisor lifecycle bug:
 
-in one command, with clean startup/shutdown and clear event visibility.
+- If ingestion OR trading thread crashes, supervisor must immediately propagate stop to the other thread and exit deterministically (raise), never hang.
 
-This should improve local operability while staying strictly paper-only.
+Also fix a small docs inconsistency in root README CORS troubleshooting text.
 
-## Read First
+## Findings To Address
 
-- `trading/runtime/runner.py`
-- `trading/runtime/cli.py`
-- `trading/market_data/ingestion_runner.py`
-- `trading/storage/repositories.py`
-- `trading/main.py`
-- `README.md`
-- `Makefile`
+1. `trading/runtime/supervisor.py`
+   - In `_ingestion_target` / `_trading_target`, exceptions are captured but `stop` is not set.
+   - This can leave the other loop running forever in resident mode and block supervisor shutdown.
 
-## Requirements
+2. `README.md`
+   - CORS section says whitelist includes both `127.0.0.1:5173` and `localhost:5173`,
+     but later text says “Only access localhost”.
+   - Align wording so both are valid (port must match Vite output).
 
-1. Create module:
-   - `trading/runtime/supervisor.py`
+## Required Changes
 
-2. Implement:
-   - `run_supervisor(...)` that starts ingestion loop and trading loop concurrently
-   - Use threads (or another simple in-process concurrency model) with shared stop signal
-   - Graceful shutdown on KeyboardInterrupt:
-     - stop signal set
-     - both loops joined with timeout
-     - supervisor exit event recorded
+### A) Supervisor crash propagation (must fix)
 
-3. Event logging:
-   - record:
-     - `supervisor_started`
-     - `supervisor_stopped`
-     - `supervisor_component_error` (if any loop crashes unexpectedly)
-   - include structured context with intervals and symbols
+In `trading/runtime/supervisor.py`:
 
-4. CLI integration:
-   - extend `trading/runtime/cli.py` with a new mode:
-     - `python -m trading.runtime.cli --supervisor`
-   - add optional flags:
-     - `--ingest-interval` (default 300)
-     - `--trade-interval` (default 300)
-     - `--max-cycles` (optional, passed to both loops for bounded test runs)
+- When either worker catches an unexpected exception:
+  - keep recording `supervisor_component_error`
+  - set shared stop event immediately (`stop.set()`)
+- Main supervisor loop should then:
+  - wait for both threads to finish (reasonable bounded join strategy is fine)
+  - raise the captured exception(s) with current behavior (single or combined)
+- Ensure `supervisor_stopped` is recorded only after both threads are not alive.
+- Keep paper-only behavior unchanged.
 
-5. Keep existing modes working:
-   - `--once`
-   - `--interval`
-   - no behavior regressions
+### B) Tests (must add/adjust)
 
-6. Add Makefile convenience target:
-   - `runtime-supervisor`
-   - uses `.venv/bin/python -m trading.runtime.cli --supervisor ...`
+Update `tests/unit/test_runtime_supervisor.py`:
 
-7. Update docs:
-   - `README.md` quickstart: add supervisor mode as the preferred "single terminal" runtime option
-   - keep paper-only safety wording
+- Add a regression test that proves:
+  - when one component raises,
+  - the other component receives stop signal (not just timeout-exit),
+  - supervisor returns/raises without hanging.
+- Use synchronization primitives (`Event`) to avoid flaky sleeps.
+- Keep all existing tests passing.
 
-## Safety Constraints
+### C) README consistency (small fix)
 
-- No live trading
-- No private Binance endpoints
-- No API key handling changes
-- No trading execution behavior expansion beyond existing paper flow
-- No write APIs in dashboard
+In `/Users/zihanma/Desktop/crypto-ai-trader/README.md` CORS troubleshooting section:
 
-## Tests
+- Replace “Only access localhost...” style wording with wording that clearly states:
+  - both `http://127.0.0.1:5173` and `http://localhost:5173` are valid,
+  - use the exact host+port shown by Vite.
 
-Add unit tests:
-- `tests/unit/test_runtime_supervisor.py`
+## Safety Constraints (strict)
 
-Cover at least:
-1. starts both components with expected arguments
-2. KeyboardInterrupt/shutdown sets stop signal and joins threads
-3. component exception records `supervisor_component_error` and exits safely
-4. existing CLI modes (`--once`, `--interval`) still parse and run path selection correctly
-
-If needed, add focused tests in `tests/unit/test_runtime_cli.py`.
+- No live trading implementation.
+- No private Binance API integration.
+- No real API key usage.
+- No bypass of risk controls.
+- No order execution expansion beyond current paper flow.
 
 ## Verification (required)
 
-Run:
+Run exactly:
 
 ```bash
+cd /Users/zihanma/Desktop/crypto-ai-trader
 .venv/bin/pytest tests/unit/test_runtime_supervisor.py -q
-.venv/bin/ruff check trading/runtime/supervisor.py trading/runtime/cli.py tests/unit/test_runtime_supervisor.py
+.venv/bin/ruff check trading/runtime/supervisor.py tests/unit/test_runtime_supervisor.py README.md
 .venv/bin/pytest -q
 .venv/bin/ruff check .
-cd dashboard && npm run build
-cd ..
+cd dashboard && npm run build && cd ..
 git status --short
 ```
 
 ## Commit
 
-If verification passes:
+If verification passes, commit only relevant files:
 
 ```bash
-git add trading/runtime/supervisor.py trading/runtime/cli.py tests/unit/test_runtime_supervisor.py Makefile README.md docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
-git commit -m "feat: add unified local runtime supervisor"
+cd /Users/zihanma/Desktop/crypto-ai-trader
+git add trading/runtime/supervisor.py tests/unit/test_runtime_supervisor.py README.md docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
+git commit -m "fix: propagate supervisor stop on component crash"
 ```
 
 ## Completion Report
 
-Write `docs/claude-tasks/last-result.md`:
+Write `/Users/zihanma/Desktop/crypto-ai-trader/docs/claude-tasks/last-result.md` in this format:
 
 ```text
 # Last Claude Code Result
 
-Task: Unified Local Supervisor (Ingestion + Trading Loops)
+Task: Fix Supervisor Crash Propagation + Docs Consistency
 Status: completed | failed
 
 Files changed:
@@ -137,4 +117,3 @@ Notes:
 ```
 
 Then stop.
-

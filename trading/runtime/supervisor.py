@@ -100,6 +100,7 @@ def run_supervisor(
         except Exception as exc:
             ingestion_exc = exc
             logger.exception("Ingestion thread raised an exception")
+            stop.set()  # signal the other loop to shut down
             _record_component_error("ingestion", exc)
 
     def _trading_target() -> None:
@@ -118,6 +119,7 @@ def run_supervisor(
         except Exception as exc:
             trading_exc = exc
             logger.exception("Trading thread raised an exception")
+            stop.set()  # signal the other loop to shut down
             _record_component_error("trading", exc)
 
     def _record_supervisor_stopped(
