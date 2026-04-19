@@ -1,127 +1,126 @@
-# Claude Code Task: Milestone 6 Dashboard Completion (Read-Only, Paper-Only)
+# Claude Code Task: Runtime Ops Hardening (24/7 Local Reliability, Paper-Only)
 
 You are the implementation worker for `/Users/zihanma/Desktop/crypto-ai-trader`.
 
 ## Goal
 
-Upgrade the dashboard from current single-page status view into a complete multi-page control room for paper trading operations:
+Harden local runtime operations for long-running paper trading:
 
-- Overview
-- Signals
-- Orders
-- Risk
-- Analytics
-- Extensions
-- Logs
-- Settings
+- safer process lifecycle
+- restart visibility and recovery metadata
+- better operational observability
+- one-command local reliability checks
 
-This milestone is **UI/API visibility only**. No trade execution controls, no live mode actions.
+This is an ops-hardening milestone, not a strategy or live-trading milestone.
 
 ## Read First
 
-- `/Users/zihanma/Desktop/crypto-ai-trader/dashboard/src/App.tsx`
-- `/Users/zihanma/Desktop/crypto-ai-trader/dashboard/src/api/client.ts`
-- `/Users/zihanma/Desktop/crypto-ai-trader/dashboard/src/styles.css`
-- `/Users/zihanma/Desktop/crypto-ai-trader/trading/main.py`
-- `/Users/zihanma/Desktop/crypto-ai-trader/trading/dashboard_api/routes_*.py`
+- `/Users/zihanma/Desktop/crypto-ai-trader/trading/runtime/runner.py`
+- `/Users/zihanma/Desktop/crypto-ai-trader/trading/runtime/supervisor.py`
+- `/Users/zihanma/Desktop/crypto-ai-trader/trading/runtime/cli.py`
+- `/Users/zihanma/Desktop/crypto-ai-trader/trading/storage/repositories.py`
+- `/Users/zihanma/Desktop/crypto-ai-trader/trading/dashboard_api/routes_runtime.py`
+- `/Users/zihanma/Desktop/crypto-ai-trader/Makefile`
 - `/Users/zihanma/Desktop/crypto-ai-trader/README.md`
-- `/Users/zihanma/Desktop/crypto-ai-trader/dashboard/README.md`
 
 ## Required Scope
 
-### 1) Frontend routing and page layout
+### 1) Supervisor heartbeat + liveness metadata
 
-- Add a lightweight page-navigation structure (tab or sidebar) in React.
-- Implement pages:
-  - `Overview`
-  - `Signals`
-  - `Orders`
-  - `Risk`
-  - `Analytics`
-  - `Extensions`
-  - `Logs`
-  - `Settings`
-- Keep current dashboard visual constraints:
-  - no card-inside-card
-  - border radius <= 8px
-  - letter-spacing must be 0
-  - avoid dominant dark blue/slate single-tone palette
+Enhance supervisor visibility so operators can tell if runtime is genuinely alive:
 
-### 2) Data mapping per page (read-only)
+- Add periodic supervisor heartbeat event (e.g. every 60s) while loops are running.
+- Heartbeat event should include:
+  - ingest thread alive flag
+  - trading thread alive flag
+  - uptime seconds
+  - active symbols
+- Ensure heartbeat stops cleanly when supervisor exits.
 
-- Reuse existing APIs where possible.
-- Add only missing **GET** APIs if needed; no POST/PUT/DELETE.
+### 2) Runtime restart/recovery markers
 
-Required page content:
+Add minimal, deterministic restart metadata events:
 
-1. Overview
-   - Mode / live flag / risk state
-   - account metrics
-   - runtime heartbeat
-   - latest critical events
+- On supervisor start, record a `runtime_boot` event with:
+  - startup timestamp (UTC)
+  - process mode (`supervisor`)
+  - configured intervals
+- On supervisor stop, include total uptime in `supervisor_stopped` context.
+- If a component crashes, include crash marker with component + exception type + message.
 
-2. Signals
-   - recent signal/cycle-related events
-   - candidate present/no-signal/rejected/executed counts (time-window summary)
-   - explicit reason fields where available
+### 3) Runtime status API enhancement (read-only)
 
-3. Orders
-   - existing recent orders table
-   - last-hour and last-24h aggregates
+Extend `/runtime/status` response with operational fields (safe defaults when absent):
 
-4. Risk
-   - profile + thresholds (pct and USDT where available)
-   - current risk state + reason
-   - recent risk reject events
+- `supervisor_alive` (bool | null)
+- `ingestion_thread_alive` (bool | null)
+- `trading_thread_alive` (bool | null)
+- `uptime_seconds` (int | null)
+- `last_heartbeat_time` (iso | null)
+- `last_component_error` (string | null)
 
-5. Analytics
-   - equity snapshot trend (simple line/list is fine; no heavy chart lib required)
-   - win/loss proxy stats derived from fills/orders/events
-   - daily pnl summary from available data
+Do not break existing fields consumed by dashboard.
 
-6. Extensions
-   - render static disabled extension templates from design:
-     - FuturesMomentumTemplate
-     - OrderBookImbalanceTemplate
-     - CrossExchangeArbitrageTemplate
-     - NewsSentimentTemplate
-     - OnchainFlowTemplate
-     - MLSignalTemplate
-   - all shown as disabled/read-only with reason + next milestone
+### 4) Dashboard Overview runtime card enhancement
 
-7. Logs
-   - recent events feed with filtering by severity/component
+On Overview page runtime section, display the new operational fields:
 
-8. Settings
-   - read-only system settings summary
-   - explicit “paper mode only” safety notice
-   - no editable secrets, no execution toggles
+- alive/degraded indicator
+- uptime
+- last heartbeat time
+- last component error
 
-### 3) Degraded/offline behavior
+Maintain existing partial-failure behavior:
 
-- Preserve and extend current partial-failure behavior:
-  - per-endpoint failure tracking
-  - failed panels show placeholders
-  - successful panels keep real data
-- Keep a visible degraded/offline banner when any critical endpoint fails.
+- per-endpoint failure flags
+- placeholders only for failed panels
+- successful panels keep real data
 
-### 4) Backend (only if required for missing visibility)
+### 5) Local ops command set
 
-- If adding backend routes, keep them strictly read-only under `trading/dashboard_api/`.
-- Wire routers in `trading/main.py`.
-- Add integration tests for new endpoints.
+Add Makefile helpers for operator workflow:
+
+- `make runtime-supervisor` (already exists; keep)
+- `make runtime-health`:
+  - curl health, runtime status, risk status endpoints
+  - concise output
+- `make runtime-tail-events`:
+  - print recent runtime/supervisor/ingestion events (read-only DB query via existing Python modules)
+
+### 6) Docs update
+
+Update README with a short “24/7 Local Ops” section:
+
+- how to start supervisor
+- how to run runtime-health checks
+- how to inspect recent events
+- expected healthy signals (heartbeat freshness, thread alive flags)
 
 ## Safety Constraints (strict)
 
 - No live trading implementation.
-- No private Binance API usage.
+- No private Binance API integration.
 - No API key handling changes.
-- No order placement API.
-- Do not bypass RiskEngine / execution safety boundaries.
+- No order execution endpoint.
+- No bypass of RiskEngine / execution safety boundaries.
 
-## Tests & Verification (required)
+## Tests (required)
 
-Run:
+Add/extend tests to cover:
+
+1. supervisor heartbeat event emission
+2. runtime status includes new fields with safe defaults
+3. runtime status reflects heartbeat and component error paths
+4. dashboard build remains passing
+
+Prefer focused tests in:
+
+- `tests/unit/test_runtime_supervisor.py`
+- `tests/integration/test_runtime_status_api.py`
+
+## Verification (required)
+
+Run exactly:
 
 ```bash
 cd /Users/zihanma/Desktop/crypto-ai-trader
@@ -133,16 +132,14 @@ cd /Users/zihanma/Desktop/crypto-ai-trader
 git status --short
 ```
 
-If backend routes were added, include focused integration tests and run them explicitly too.
-
 ## Commit
 
 If verification passes:
 
 ```bash
 cd /Users/zihanma/Desktop/crypto-ai-trader
-git add dashboard/src trading/dashboard_api trading/main.py tests README.md dashboard/README.md docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
-git commit -m "feat: complete milestone 6 multi-page read-only dashboard"
+git add trading/runtime trading/dashboard_api dashboard/src Makefile README.md tests docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
+git commit -m "feat: harden local runtime ops observability and health checks"
 ```
 
 ## Completion Report
@@ -152,8 +149,8 @@ Write `/Users/zihanma/Desktop/crypto-ai-trader/docs/claude-tasks/last-result.md`
 - Task
 - Status
 - Files changed
-- Verification output summary
+- Verification summary
 - Commit hash
-- Safety checklist confirmation
+- Safety checklist
 
 Then stop.

@@ -1,4 +1,4 @@
-.PHONY: help install backend dashboard db-init runtime-once runtime-loop runtime-supervisor check lint test
+.PHONY: help install backend dashboard db-init runtime-once runtime-loop runtime-supervisor runtime-health runtime-tail-events check lint test
 
 PYTHON=.venv/bin/python
 PYTEST=.venv/bin/pytest
@@ -9,6 +9,7 @@ RUNTIME_INTERVAL?=300
 RUNTIME_SYMBOLS?=BTCUSDT,ETHUSDT,SOLUSDT
 INGEST_INTERVAL?=300
 TRADE_INTERVAL?=300
+API_BASE=http://127.0.0.1:$(BACKEND_PORT)
 
 help:
 	@echo "Crypto AI Trader — Local Paper Trading"
@@ -53,6 +54,30 @@ runtime-supervisor:
 		--trade-interval $(TRADE_INTERVAL) \
 		$(if $(RUNTIME_SYMBOLS),--symbols $(RUNTIME_SYMBOLS),) \
 		$(if $(MAX_CYCLES),--max-cycles $(MAX_CYCLES),)
+
+runtime-health:
+	@echo "=== Health ===" && curl -s $(API_BASE)/health | $(PYTHON) -m json.tool && \
+	@echo "=== Runtime Status ===" && curl -s $(API_BASE)/runtime/status | $(PYTHON) -m json.tool && \
+	@echo "=== Risk Status ===" && curl -s "$(API_BASE)/risk/status?day_start_equity=500&current_equity=500" | $(PYTHON) -m json.tool
+
+runtime-tail-events:
+	$(PYTHON) -c " \
+from trading.runtime.config import AppSettings; \
+from trading.storage.db import create_database_engine, create_session_factory, init_db; \
+from trading.storage.repositories import EventsRepository; \
+settings = AppSettings(); \
+engine = create_database_engine(settings.database_url); \
+init_db(engine); \
+factory = create_session_factory(engine); \
+with factory() as session: \
+    repo = EventsRepository(session); \
+    events = repo.list_recent(limit=30); \
+print(f'{'TIME':<28} {'SEVERITY':<10} {'COMPONENT':<15} {'TYPE':<35} MESSAGE'); \
+print('-' * 110); \
+for e in reversed(events): \
+    msg = e.message[:50] if len(e.message) > 50 else e.message; \
+    print(f'{str(e.created_at):<28} {e.severity:<10} {e.component:<15} {e.event_type:<35} {msg}'); \
+"
 
 check:
 	$(RUFF) check .

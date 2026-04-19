@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
+from datetime import UTC, datetime
 from decimal import Decimal
 from threading import Event as ThreadingEvent
 from typing import TYPE_CHECKING
@@ -58,8 +59,40 @@ def run_supervisor(
     if trade_interval < 1:
         raise ValueError(f"trade_interval must be >= 1, got {trade_interval}")
 
+    _start_time = datetime.now(UTC)
     stop = ThreadingEvent()
     notify = notifier or LogNotifier()
+
+    ingest_thread: threading.Thread | None = None
+    trade_thread: threading.Thread | None = None
+
+    def _emit_heartbeat() -> None:
+        try:
+            with session_factory() as session:
+                EventsRepository(session).record_event(
+                    event_type="supervisor_heartbeat",
+                    severity="info",
+                    component="supervisor",
+                    message="Supervisor heartbeat",
+                    context={
+                        "ingest_thread_alive": ingest_thread.is_alive(),
+                        "trading_thread_alive": trade_thread.is_alive(),
+                        "uptime_seconds": int(
+                            (datetime.now(UTC) - _start_time).total_seconds()
+                        ),
+                        "symbols": symbols,
+                    },
+                )
+        except Exception:
+            pass  # never let heartbeat crash
+
+    def _heartbeat_target() -> None:
+        _emit_heartbeat()  # immediate first heartbeat
+        while not stop.wait(timeout=60):
+            try:
+                _emit_heartbeat()
+            except Exception:
+                pass  # never let heartbeat crash
 
     with session_factory() as session:
         events_repo = EventsRepository(session)
@@ -69,6 +102,8 @@ def run_supervisor(
             component="supervisor",
             message="Supervisor started — running ingestion and trading loops",
             context={
+                "startup_timestamp_utc": _start_time.isoformat(),
+                "process_mode": "supervisor",
                 "ingest_interval": ingest_interval,
                 "trade_interval": trade_interval,
                 "max_cycles": max_cycles,
@@ -133,6 +168,9 @@ def run_supervisor(
                     component="supervisor",
                     message="Supervisor stopped",
                     context={
+                        "uptime_seconds": (
+                            datetime.now(UTC) - _start_time
+                        ).total_seconds(),
                         "ingestion_exc": type(ing_exc).__name__ if ing_exc else None,
                         "trading_exc": type(trade_exc).__name__ if trade_exc else None,
                     },
@@ -173,11 +211,15 @@ def run_supervisor(
     ingest_thread.start()
     trade_thread.start()
 
+    heartbeat_thread = threading.Thread(target=_heartbeat_target, name="heartbeat")
+    heartbeat_thread.start()
+
     def _wait_for_workers_to_finish() -> None:
         """Block until both worker threads have fully exited."""
         while ingest_thread.is_alive() or trade_thread.is_alive():
             ingest_thread.join(timeout=1)
             trade_thread.join(timeout=1)
+        heartbeat_thread.join(timeout=1)
 
     # Wait for both threads to finish before recording supervisor_stopped.
     # In resident mode (no max_cycles) this blocks indefinitely until a

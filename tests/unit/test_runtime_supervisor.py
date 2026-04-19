@@ -52,6 +52,173 @@ def make_session_factory():
     return factory
 
 
+class TestSupervisorHeartbeat:
+    """Supervisor emits periodic heartbeat events while running."""
+
+    def test_heartbeat_event_recorded_on_shutdown(self):
+        """supervisor_stopped triggers a final heartbeat before threads join."""
+        events_recorded: list[dict] = []
+
+        class FakeEventsRepo:
+            def record_event(self, **kwargs):
+                events_recorded.append(kwargs)
+
+        def fake_ingest_loop(**kwargs):
+            kwargs["stop_event"].set()
+
+        def fake_run_loop(**kwargs):
+            kwargs["stop_event"].set()
+
+        with patch(
+            "trading.runtime.supervisor.ingest_loop", side_effect=fake_ingest_loop
+        ):
+            with patch("trading.runtime.supervisor.run_loop", side_effect=fake_run_loop):
+                with patch(
+                    "trading.runtime.supervisor.EventsRepository",
+                    return_value=FakeEventsRepo(),
+                ):
+                    run_supervisor(
+                        session_factory=make_session_factory(),
+                        ai_scorer=FakeAIScorer(),
+                        ingest_interval=300,
+                        trade_interval=300,
+                        max_cycles=1,
+                    )
+
+        # A heartbeat must have been recorded during startup
+        heartbeat_events = [
+            e for e in events_recorded if e["event_type"] == "supervisor_heartbeat"
+        ]
+        assert len(heartbeat_events) >= 1, (
+            f"Expected at least 1 heartbeat event, got {len(heartbeat_events)}"
+        )
+        hb = heartbeat_events[0]
+        assert "ingest_thread_alive" in hb["context"]
+        assert "trading_thread_alive" in hb["context"]
+        assert "uptime_seconds" in hb["context"]
+        assert "symbols" in hb["context"]
+
+    def test_runtime_boot_fields_in_startup_event(self):
+        """supervisor_started includes startup_timestamp_utc, process_mode, and intervals."""
+        events_recorded: list[dict] = []
+
+        class FakeEventsRepo:
+            def record_event(self, **kwargs):
+                events_recorded.append(kwargs)
+
+        def fake_ingest_loop(**kwargs):
+            kwargs["stop_event"].set()
+
+        def fake_run_loop(**kwargs):
+            kwargs["stop_event"].set()
+
+        with patch(
+            "trading.runtime.supervisor.ingest_loop", side_effect=fake_ingest_loop
+        ):
+            with patch("trading.runtime.supervisor.run_loop", side_effect=fake_run_loop):
+                with patch(
+                    "trading.runtime.supervisor.EventsRepository",
+                    return_value=FakeEventsRepo(),
+                ):
+                    run_supervisor(
+                        session_factory=make_session_factory(),
+                        ai_scorer=FakeAIScorer(),
+                        ingest_interval=120,
+                        trade_interval=60,
+                        max_cycles=1,
+                    )
+
+        startup_events = [
+            e for e in events_recorded if e["event_type"] == "supervisor_started"
+        ]
+        assert len(startup_events) == 1, "Expected exactly one supervisor_started event"
+        ctx = startup_events[0]["context"]
+        assert ctx["process_mode"] == "supervisor"
+        assert ctx["ingest_interval"] == 120
+        assert ctx["trade_interval"] == 60
+        assert "startup_timestamp_utc" in ctx
+
+    def test_heartbeat_thread_exits_when_stop_is_set(self):
+        """Heartbeat thread exits promptly when stop event is set (no 60s wait)."""
+        import time
+
+        heartbeat_calls: list = []
+
+        class FakeEventsRepo:
+            def record_event(self, **kwargs):
+                if kwargs["event_type"] == "supervisor_heartbeat":
+                    heartbeat_calls.append(kwargs)
+
+        def fake_ingest_loop(**kwargs):
+            # Stop after ~100ms — heartbeat should have fired at most once
+            time.sleep(0.1)
+            kwargs["stop_event"].set()
+
+        def fake_run_loop(**kwargs):
+            kwargs["stop_event"].set()
+
+        with patch(
+            "trading.runtime.supervisor.ingest_loop", side_effect=fake_ingest_loop
+        ):
+            with patch("trading.runtime.supervisor.run_loop", side_effect=fake_run_loop):
+                with patch(
+                    "trading.runtime.supervisor.EventsRepository",
+                    return_value=FakeEventsRepo(),
+                ):
+                    start = time.monotonic()
+                    run_supervisor(
+                        session_factory=make_session_factory(),
+                        ai_scorer=FakeAIScorer(),
+                        ingest_interval=300,
+                        trade_interval=300,
+                        max_cycles=1,
+                    )
+                    elapsed = time.monotonic() - start
+
+        # Should complete in < 3s; if heartbeat blocked for 60s the test would fail
+        assert elapsed < 5, (
+            f"Supervisor took {elapsed:.1f}s to exit — heartbeat thread may have blocked shutdown"
+        )
+
+    def test_uptime_in_supervisor_stopped_context(self):
+        """supervisor_stopped includes uptime_seconds in its context."""
+        events_recorded: list[dict] = []
+
+        class FakeEventsRepo:
+            def record_event(self, **kwargs):
+                events_recorded.append(kwargs)
+
+        def fake_ingest_loop(**kwargs):
+            kwargs["stop_event"].set()
+
+        def fake_run_loop(**kwargs):
+            kwargs["stop_event"].set()
+
+        with patch(
+            "trading.runtime.supervisor.ingest_loop", side_effect=fake_ingest_loop
+        ):
+            with patch("trading.runtime.supervisor.run_loop", side_effect=fake_run_loop):
+                with patch(
+                    "trading.runtime.supervisor.EventsRepository",
+                    return_value=FakeEventsRepo(),
+                ):
+                    run_supervisor(
+                        session_factory=make_session_factory(),
+                        ai_scorer=FakeAIScorer(),
+                        ingest_interval=300,
+                        trade_interval=300,
+                        max_cycles=1,
+                    )
+
+        stopped_events = [
+            e for e in events_recorded if e["event_type"] == "supervisor_stopped"
+        ]
+        assert len(stopped_events) == 1
+        ctx = stopped_events[0]["context"]
+        assert "uptime_seconds" in ctx
+        assert isinstance(ctx["uptime_seconds"], (int, float))
+
+
 class TestRunSupervisor:
     """run_supervisor starts both loops and shuts down cleanly."""
 

@@ -64,6 +64,12 @@ export interface RuntimeStatus {
   last_error_message: string | null;
   cycles_last_hour: number;
   orders_last_hour: number;
+  supervisor_alive: boolean | null;
+  ingestion_thread_alive: boolean | null;
+  trading_thread_alive: boolean | null;
+  uptime_seconds: number | null;
+  last_heartbeat_time: string | null;
+  last_component_error: string | null;
 }
 
 // ── Fetch helper ──────────────────────────────────────────────────────────────

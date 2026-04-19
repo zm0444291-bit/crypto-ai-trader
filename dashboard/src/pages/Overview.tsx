@@ -51,6 +51,12 @@ const PLACEHOLDER_RUNTIME: RuntimeStatus = {
   last_error_message: 'backend unavailable',
   cycles_last_hour: 0,
   orders_last_hour: 0,
+  supervisor_alive: null,
+  ingestion_thread_alive: null,
+  trading_thread_alive: null,
+  uptime_seconds: null,
+  last_heartbeat_time: null,
+  last_component_error: null,
 };
 
 // ── Sub-components ───────────────────────────────────────────────────────────
@@ -289,6 +295,14 @@ function EventsSection({
   );
 }
 
+function formatUptime(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
 function RuntimeSection({
   runtime,
   lastUpdated,
@@ -298,6 +312,13 @@ function RuntimeSection({
 }) {
   const display = runtime ?? PLACEHOLDER_RUNTIME;
 
+  const heartbeatDot =
+    display.supervisor_alive === true
+      ? 'dot-normal'
+      : display.supervisor_alive === false
+        ? 'dot-degraded'
+        : 'dot-disabled';
+
   return (
     <div className="section">
       <div className="section-header">
@@ -305,6 +326,24 @@ function RuntimeSection({
         <LastUpdatedStamp date={lastUpdated} />
       </div>
       <div className="runtime-grid">
+        <div className="metric-card">
+          <div className="metric-label">Status</div>
+          <div className="metric-value">
+            <span className={`dot ${heartbeatDot}`} />
+          </div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Uptime</div>
+          <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
+            {display.uptime_seconds !== null ? formatUptime(display.uptime_seconds) : '—'}
+          </div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Last Heartbeat</div>
+          <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
+            {display.last_heartbeat_time ? fmtTime(display.last_heartbeat_time) : '—'}
+          </div>
+        </div>
         <div className="metric-card">
           <div className="metric-label">Last Cycle</div>
           <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
@@ -327,6 +366,12 @@ function RuntimeSection({
           <div className="metric-label">Last Error</div>
           <div className={`metric-value ${display.last_error_message ? 'negative' : (runtime ? '' : 'placeholder')}`}>
             {display.last_error_message ?? (runtime ? 'none' : '—')}
+          </div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Component Error</div>
+          <div className={`metric-value ${display.last_component_error ? 'negative' : (runtime ? '' : 'placeholder')}`}>
+            {display.last_component_error ?? (runtime ? 'none' : '—')}
           </div>
         </div>
       </div>

@@ -19,6 +19,13 @@ class RuntimeStatusResponse(BaseModel):
     last_error_message: str | None
     cycles_last_hour: int
     orders_last_hour: int
+    # Supervisor heartbeat fields
+    supervisor_alive: bool | None
+    ingestion_thread_alive: bool | None
+    trading_thread_alive: bool | None
+    uptime_seconds: int | None
+    last_heartbeat_time: str | None
+    last_component_error: str | None
 
 
 @router.get("/runtime/status", response_model=RuntimeStatusResponse)
@@ -40,6 +47,12 @@ def read_runtime_status() -> RuntimeStatusResponse:
             last_error_message=None,
             cycles_last_hour=0,
             orders_last_hour=0,
+            supervisor_alive=None,
+            ingestion_thread_alive=None,
+            trading_thread_alive=None,
+            uptime_seconds=None,
+            last_heartbeat_time=None,
+            last_component_error=None,
         )
 
     # Use naive UTC to match how SQLite stores datetimes (no TZ info)
@@ -84,12 +97,51 @@ def read_runtime_status() -> RuntimeStatusResponse:
                 1 for o in recent_orders if o.created_at >= cutoff
             )
 
+            # ── supervisor heartbeat fields (2-minute freshness window) ──
+            heartbeat_cutoff = now - timedelta(minutes=2)
+            supervisor_alive: bool | None = None
+            ingestion_thread_alive: bool | None = None
+            trading_thread_alive: bool | None = None
+            uptime_seconds: int | None = None
+            last_heartbeat_time: str | None = None
+            most_recent_heartbeat: Any = None
+
+            for e in all_events:
+                if e.event_type == "supervisor_heartbeat":
+                    most_recent_heartbeat = e
+                    break
+
+            if most_recent_heartbeat is not None:
+                hb_created = most_recent_heartbeat.created_at
+                last_heartbeat_time = hb_created.isoformat() if hb_created else None
+                if hb_created and hb_created >= heartbeat_cutoff:
+                    supervisor_alive = True
+                elif hb_created:
+                    supervisor_alive = False
+                ctx = most_recent_heartbeat.context_json or {}
+                ingestion_thread_alive = ctx.get("ingest_thread_alive")
+                trading_thread_alive = ctx.get("trading_thread_alive")
+                uptime_seconds = ctx.get("uptime_seconds")
+
+            # ── last_component_error: most recent supervisor_component_error ──
+            last_component_error: str | None = None
+            for e in all_events:
+                if e.event_type == "supervisor_component_error":
+                    last_component_error = e.message
+                    break
+
         return RuntimeStatusResponse(
             last_cycle_status=last_cycle_status,
             last_cycle_time=last_cycle_time,
             last_error_message=last_error_message,
             cycles_last_hour=cycles_last_hour,
             orders_last_hour=orders_last_hour,
+            supervisor_alive=supervisor_alive,
+            ingestion_thread_alive=ingestion_thread_alive,
+            trading_thread_alive=trading_thread_alive,
+            uptime_seconds=uptime_seconds,
+            last_heartbeat_time=last_heartbeat_time,
+            last_component_error=last_component_error,
         )
 
     except Exception:
@@ -99,4 +151,10 @@ def read_runtime_status() -> RuntimeStatusResponse:
             last_error_message=None,
             cycles_last_hour=0,
             orders_last_hour=0,
+            supervisor_alive=None,
+            ingestion_thread_alive=None,
+            trading_thread_alive=None,
+            uptime_seconds=None,
+            last_heartbeat_time=None,
+            last_component_error=None,
         )

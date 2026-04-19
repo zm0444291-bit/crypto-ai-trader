@@ -28,6 +28,46 @@ pytest
 uvicorn trading.main:app --reload
 ```
 
+## 24/7 Local Ops
+
+Long-running supervisor-based paper trading with operational visibility.
+
+### Start the supervisor
+
+```bash
+make runtime-supervisor                          # 5min ingest + trade intervals
+make runtime-supervisor INGEST_INTERVAL=120 TRADE_INTERVAL=60  # custom intervals
+```
+
+### Health checks
+
+```bash
+make runtime-health   # curl health, runtime status, and risk status endpoints
+```
+
+Expected healthy signals:
+- `supervisor_alive: true` — recent heartbeat recorded (within 2 min)
+- `ingestion_thread_alive: true` and `trading_thread_alive: true` — both loops running
+- `uptime_seconds` increasing on each heartbeat
+- `last_component_error: null` — no component crashes
+
+### Inspect recent events
+
+```bash
+make runtime-tail-events   # print last 30 events from the DB
+```
+
+### Stop the supervisor
+
+Press `Ctrl+C` — the supervisor handles shutdown cleanly, sets the stop event, waits for both loops, and records `supervisor_stopped` with uptime.
+
+### Runtime heartbeat
+
+Every 60 seconds while running, the supervisor records a `supervisor_heartbeat` event containing:
+- `ingest_thread_alive` / `trading_thread_alive` flags
+- `uptime_seconds` since supervisor start
+- `symbols` being traded
+
 ## Local Paper Trading Quickstart
 
 This system runs **paper trading only** — no real funds are used. All trading is simulated against live market data.

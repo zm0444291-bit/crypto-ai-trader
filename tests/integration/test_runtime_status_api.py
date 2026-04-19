@@ -198,3 +198,126 @@ class TestRuntimeStatusWithData:
 
         assert response.status_code == 200
         assert response.json()["orders_last_hour"] == 2
+
+
+class TestRuntimeStatusHeartbeatFields:
+    """New heartbeat-supervision fields return safe defaults when no data is present."""
+
+    def test_empty_db_returns_null_for_new_fields(self, tmp_path, monkeypatch):
+        database_url = f"sqlite:///{tmp_path}/empty.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+
+        client = TestClient(app)
+        response = client.get("/runtime/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["supervisor_alive"] is None
+        assert body["ingestion_thread_alive"] is None
+        assert body["trading_thread_alive"] is None
+        assert body["uptime_seconds"] is None
+        assert body["last_heartbeat_time"] is None
+        assert body["last_component_error"] is None
+
+    def test_heartbeat_produces_supervisor_alive_true(self, tmp_path, monkeypatch):
+        database_url = f"sqlite:///{tmp_path}/heartbeat.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        with session_factory() as session:
+            events_repo = EventsRepository(session)
+            events_repo.record_event(
+                event_type="supervisor_heartbeat",
+                severity="info",
+                component="supervisor",
+                message="Supervisor heartbeat",
+                context={
+                    "ingest_thread_alive": True,
+                    "trading_thread_alive": True,
+                    "uptime_seconds": 120,
+                    "symbols": ["BTCUSDT"],
+                },
+            )
+
+        client = TestClient(app)
+        response = client.get("/runtime/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["supervisor_alive"] is True
+        assert body["ingestion_thread_alive"] is True
+        assert body["trading_thread_alive"] is True
+        assert body["uptime_seconds"] == 120
+        assert body["last_heartbeat_time"] is not None
+
+    def test_stale_heartbeat_produces_supervisor_alive_false(self, tmp_path, monkeypatch):
+        """Heartbeat older than 2 minutes is considered stale (supervisor alive = False)."""
+        database_url = f"sqlite:///{tmp_path}/stale.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        stale_time = datetime.now(UTC) - timedelta(minutes=3)
+        event = Event(
+            event_type="supervisor_heartbeat",
+            severity="info",
+            component="supervisor",
+            message="Stale heartbeat",
+            context_json={
+                "ingest_thread_alive": True,
+                "trading_thread_alive": True,
+                "uptime_seconds": 999,
+                "symbols": [],
+            },
+            created_at=stale_time,
+        )
+        with session_factory() as session:
+            session.add(event)
+            session.commit()
+
+        client = TestClient(app)
+        response = client.get("/runtime/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["supervisor_alive"] is False
+        assert body["uptime_seconds"] == 999
+
+    def test_component_error_sets_last_component_error(self, tmp_path, monkeypatch):
+        database_url = f"sqlite:///{tmp_path}/comperror.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        with session_factory() as session:
+            events_repo = EventsRepository(session)
+            # Older error first
+            events_repo.record_event(
+                event_type="supervisor_component_error",
+                severity="error",
+                component="supervisor",
+                message="Old error",
+                context={"component": "ingestion", "error": "old"},
+            )
+            # More recent error
+            events_repo.record_event(
+                event_type="supervisor_component_error",
+                severity="error",
+                component="supervisor",
+                message="Ingestion thread crashed: network timeout",
+                context={"component": "ingestion", "error": "network timeout"},
+            )
+
+        client = TestClient(app)
+        response = client.get("/runtime/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["last_component_error"] == "Ingestion thread crashed: network timeout"
+
