@@ -30,6 +30,7 @@ from trading.storage.repositories import (
     CandlesRepository,
     EventsRepository,
     ExecutionRecordsRepository,
+    ShadowExecutionRepository,
 )
 from trading.strategies.active.multi_timeframe_momentum import (
     generate_momentum_candidate,
@@ -352,8 +353,8 @@ def run_paper_cycle(
 
     # ── Stage 8: execution gate ──────────────────────────────────────────────
     gate = ExecutionGate()
-    mode = get_trade_mode()
-    lock = get_live_trading_lock()
+    mode = get_trade_mode(session_factory)
+    lock = get_live_trading_lock(session_factory)
     gate_decision = gate.decide(
         mode=mode,
         lock=lock,
@@ -394,7 +395,64 @@ def run_paper_cycle(
             event_ids=event_ids,
         )
 
-    # ── Stage 9: paper execution ─────────────────────────────────────────────
+    # ── Stage 9a: shadow execution (live_shadow mode) ────────────────────────
+    if gate_decision.route == "shadow":
+        # Compute simulated fill price using the same slippage logic as PaperExecutor
+        simulated_fill_price = market_price * (
+            Decimal("1") + executor.slippage_bps / Decimal("10000")
+        )
+        shadow_record = ShadowExecutionRepository(session_factory())
+        shadow_record.record_shadow_execution(
+            symbol=candidate.symbol,
+            side=candidate.side,
+            planned_notional_usdt=size_result.notional_usdt,
+            reference_price=market_price,
+            simulated_fill_price=simulated_fill_price,
+            simulated_slippage_bps=executor.slippage_bps,
+            decision_reason=ai_result.explanation if ai_result else "shadow_approved",
+            source_cycle_status="shadow_recorded",
+        )
+        shadow_ev = events_repo.record_event(
+            event_type="shadow_execution_recorded",
+            severity="info",
+            component="paper_cycle",
+            message=(
+                f"Shadow {candidate.side} {size_result.notional_usdt} {candidate.symbol}"
+                f" @ {simulated_fill_price}"
+            ),
+            context={
+                "symbol": candidate.symbol,
+                "side": candidate.side,
+                "planned_notional_usdt": str(size_result.notional_usdt),
+                "reference_price": str(market_price),
+                "simulated_fill_price": str(simulated_fill_price),
+                "simulated_slippage_bps": str(executor.slippage_bps),
+                "execution_route": gate_decision.route,
+            },
+        )
+        event_ids.append(shadow_ev.id)
+
+        finished = events_repo.record_event(
+            event_type="cycle_finished",
+            severity="info",
+            component="paper_cycle",
+            message=f"Shadow cycle completed for {input_data.symbol}",
+            context={"status": "shadow_recorded"},
+        )
+        event_ids.append(finished.id)
+
+        return CycleResult(
+            symbol=input_data.symbol,
+            status="shadow_recorded",
+            candidate_present=candidate_present,
+            ai_decision=ai_decision,
+            risk_state=risk_state,
+            order_executed=False,
+            reject_reasons=[],
+            event_ids=event_ids,
+        )
+
+    # ── Stage 9b: paper execution ─────────────────────────────────────────────
     exec_result: PaperExecutionResult = executor.execute_market_buy(
         candidate=candidate,
         position_size=size_result,

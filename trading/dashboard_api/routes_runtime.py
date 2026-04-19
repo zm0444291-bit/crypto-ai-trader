@@ -11,7 +11,7 @@ from trading.runtime.config import AppSettings
 from trading.runtime.mode import validate_mode_transition
 from trading.runtime.state import get_live_trading_lock, get_trade_mode
 from trading.storage.db import create_database_engine, create_session_factory, init_db
-from trading.storage.repositories import EventsRepository, ExecutionRecordsRepository
+from trading.storage.repositories import EventsRepository, ExecutionRecordsRepository, ShadowExecutionRepository
 
 router = APIRouter(tags=["runtime"])
 
@@ -42,6 +42,9 @@ class RuntimeStatusResponse(BaseModel):
     live_trading_lock_enabled: bool
     execution_route_effective: str
     mode_transition_guard: str | None
+    # Shadow execution fields (live_shadow mode)
+    shadow_executions_last_hour: int
+    last_shadow_time: str | None
 
 
 @router.get("/runtime/status", response_model=RuntimeStatusResponse)
@@ -73,6 +76,8 @@ def read_runtime_status() -> RuntimeStatusResponse:
             live_trading_lock_enabled=False,
             execution_route_effective="paper",
             mode_transition_guard="transition_allowed",
+            shadow_executions_last_hour=0,
+            last_shadow_time=None,
         )
 
     now = datetime.now(UTC)
@@ -120,6 +125,15 @@ def read_runtime_status() -> RuntimeStatusResponse:
                 >= one_hour_ago
             )
 
+            # ── shadow execution fields ──────────────────────────────────────────
+            shadow_repo = ShadowExecutionRepository(session)
+            shadow_executions_last_hour = shadow_repo.count_last_hour(one_hour_ago)
+            recent_shadows = shadow_repo.list_recent_shadow(limit=1)
+            last_shadow_time: str | None = None
+            if recent_shadows:
+                last_shadow_aware = _to_aware_utc(recent_shadows[0].created_at)
+                last_shadow_time = last_shadow_aware.isoformat() if last_shadow_aware else None
+
             # ── supervisor heartbeat fields (2-minute freshness window) ──
             heartbeat_cutoff = now - timedelta(minutes=2)
             supervisor_alive: bool | None = None
@@ -156,8 +170,8 @@ def read_runtime_status() -> RuntimeStatusResponse:
                     last_component_error = e.message
                     break
 
-        current_mode = get_trade_mode()
-        lock_state = get_live_trading_lock()
+        current_mode = get_trade_mode(session_factory)
+        lock_state = get_live_trading_lock(session_factory)
         transition_guard = validate_mode_transition(
             current_mode,
             "live_small_auto",
@@ -181,6 +195,8 @@ def read_runtime_status() -> RuntimeStatusResponse:
             live_trading_lock_enabled=lock_state.enabled,
             execution_route_effective=compute_execution_route(current_mode),
             mode_transition_guard=transition_guard.reason,
+            shadow_executions_last_hour=shadow_executions_last_hour,
+            last_shadow_time=last_shadow_time,
         )
 
     except Exception:
@@ -200,4 +216,62 @@ def read_runtime_status() -> RuntimeStatusResponse:
             live_trading_lock_enabled=False,
             execution_route_effective="paper",
             mode_transition_guard="transition_allowed",
+        )
+
+
+class ControlPlaneResponse(BaseModel):
+    """Read-only snapshot of the runtime control plane."""
+
+    trade_mode: str
+    lock_enabled: bool
+    lock_reason: str | None
+    execution_route: str
+    transition_guard_to_live_small_auto: str
+
+
+@router.get("/runtime/control-plane", response_model=ControlPlaneResponse)
+def read_control_plane() -> ControlPlaneResponse:
+    """Return a read-only snapshot of the runtime control plane.
+
+    This endpoint never mutates state — it is purely informational.
+    Defaults are safe values when the DB is unavailable.
+    """
+    try:
+        settings = AppSettings()
+        engine = create_database_engine(settings.database_url)
+        init_db(engine)
+        session_factory = create_session_factory(engine)
+    except Exception:
+        return ControlPlaneResponse(
+            trade_mode="paper_auto",
+            lock_enabled=False,
+            lock_reason=None,
+            execution_route="paper",
+            transition_guard_to_live_small_auto="transition_allowed",
+        )
+
+    try:
+        current_mode = get_trade_mode(session_factory)
+        lock_state = get_live_trading_lock(session_factory)
+        transition_guard = validate_mode_transition(
+            current_mode,
+            "live_small_auto",
+            lock_enabled=lock_state.enabled,
+            allow_live_unlock=False,
+        )
+
+        return ControlPlaneResponse(
+            trade_mode=current_mode,
+            lock_enabled=lock_state.enabled,
+            lock_reason=lock_state.reason,
+            execution_route=compute_execution_route(current_mode),
+            transition_guard_to_live_small_auto=transition_guard.reason,
+        )
+    except Exception:
+        return ControlPlaneResponse(
+            trade_mode="paper_auto",
+            lock_enabled=False,
+            lock_reason=None,
+            execution_route="paper",
+            transition_guard_to_live_small_auto="transition_allowed",
         )

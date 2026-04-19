@@ -3,9 +3,10 @@ from typing import Any
 from sqlalchemy import asc, desc, select
 from sqlalchemy.orm import Session
 
+from trading.execution.gate import TRADE_MODES, LiveTradingLock
 from trading.execution.paper_executor import PaperFill, PaperOrder
 from trading.market_data.schemas import CandleData
-from trading.storage.models import Candle, Event, Fill, Order
+from trading.storage.models import Candle, Event, Fill, Order, RuntimeControl, ShadowExecution
 
 
 class EventsRepository:
@@ -168,3 +169,116 @@ class ExecutionRecordsRepository:
     def list_fills_chronological(self) -> list[Fill]:
         statement = select(Fill).order_by(Fill.filled_at, Fill.id)
         return list(self.session.scalars(statement))
+
+
+class RuntimeControlRepository:
+    """Persistence helper for runtime control-plane state (trade mode, lock, etc.)."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    # ── trade mode ─────────────────────────────────────────────────────────────
+
+    def get_trade_mode(self, default: TRADE_MODES = "paper_auto") -> TRADE_MODES:
+        """Return the persisted trade mode, or the default if absent."""
+        row = self.session.get(RuntimeControl, "trade_mode")
+        if row is None:
+            return default
+        return row.value_json.get("mode", default)
+
+    def set_trade_mode(self, mode: TRADE_MODES) -> None:
+        """Persist a trade mode."""
+        row = self.session.get(RuntimeControl, "trade_mode")
+        if row is None:
+            row = RuntimeControl(key="trade_mode", value_json={"mode": mode})
+            self.session.add(row)
+        else:
+            row.value_json = {"mode": mode}
+        self.session.commit()
+
+    # ── live trading lock ───────────────────────────────────────────────────────
+
+    def get_live_trading_lock(self) -> LiveTradingLock:
+        """Return the persisted live trading lock state."""
+        row = self.session.get(RuntimeControl, "live_trading_lock")
+        if row is None:
+            return LiveTradingLock(enabled=False)
+        return LiveTradingLock(
+            enabled=row.value_json.get("enabled", False),
+            reason=row.value_json.get("reason"),
+        )
+
+    def set_live_trading_lock(self, enabled: bool, reason: str | None = None) -> None:
+        """Persist the live trading lock state."""
+        row = self.session.get(RuntimeControl, "live_trading_lock")
+        if row is None:
+            row = RuntimeControl(
+                key="live_trading_lock",
+                value_json={"enabled": enabled, "reason": reason},
+            )
+            self.session.add(row)
+        else:
+            row.value_json = {"enabled": enabled, "reason": reason}
+        self.session.commit()
+
+    # ── snapshot ────────────────────────────────────────────────────────────────
+
+    def get_control_plane_snapshot(self) -> dict:
+        """Return a full snapshot of the control plane for read-only queries."""
+        mode = self.get_trade_mode()
+        lock = self.get_live_trading_lock()
+        return {
+            "trade_mode": mode,
+            "lock_enabled": lock.enabled,
+            "lock_reason": lock.reason,
+        }
+
+
+class ShadowExecutionRepository:
+    """Persistence helper for shadow execution records (live_shadow mode)."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def record_shadow_execution(
+        self,
+        symbol: str,
+        side: str,
+        planned_notional_usdt: Decimal,
+        reference_price: Decimal,
+        simulated_fill_price: Decimal,
+        simulated_slippage_bps: Decimal,
+        decision_reason: str,
+        source_cycle_status: str | None = None,
+    ) -> ShadowExecution:
+        """Persist a shadow execution record."""
+        record = ShadowExecution(
+            symbol=symbol,
+            side=side,
+            planned_notional_usdt=planned_notional_usdt,
+            reference_price=reference_price,
+            simulated_fill_price=simulated_fill_price,
+            simulated_slippage_bps=simulated_slippage_bps,
+            decision_reason=decision_reason,
+            source_cycle_status=source_cycle_status,
+        )
+        self.session.add(record)
+        self.session.commit()
+        self.session.refresh(record)
+        return record
+
+    def list_recent_shadow(self, limit: int = 50) -> list[ShadowExecution]:
+        """Return the most recent shadow execution records."""
+        statement = (
+            select(ShadowExecution)
+            .order_by(desc(ShadowExecution.created_at))
+            .limit(limit)
+        )
+        return list(self.session.scalars(statement))
+
+    def count_last_hour(self, cutoff: datetime) -> int:
+        """Return count of shadow executions created after cutoff."""
+        statement = select(ShadowExecution).where(
+            ShadowExecution.created_at >= cutoff
+        )
+        return len(list(self.session.scalars(statement)))

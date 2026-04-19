@@ -9,7 +9,11 @@ from trading.execution.paper_executor import PaperFill, PaperOrder
 from trading.main import app
 from trading.storage.db import Base, create_database_engine, create_session_factory
 from trading.storage.models import Event
-from trading.storage.repositories import EventsRepository, ExecutionRecordsRepository
+from trading.storage.repositories import (
+    EventsRepository,
+    ExecutionRecordsRepository,
+    RuntimeControlRepository,
+)
 
 
 class TestRuntimeStatusEmptyDB:
@@ -320,4 +324,105 @@ class TestRuntimeStatusHeartbeatFields:
         assert response.status_code == 200
         body = response.json()
         assert body["last_component_error"] == "Ingestion thread crashed: network timeout"
+
+
+class TestRuntimeStatusWithControlPlane:
+    """Status endpoint reflects persisted trade_mode and lock values."""
+
+    def test_status_returns_persisted_trade_mode(self, tmp_path, monkeypatch):
+        database_url = f"sqlite:///{tmp_path}/control_mode.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        # Pre-populate a trade mode
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            repo.set_trade_mode("live_shadow")
+
+        client = TestClient(app)
+        response = client.get("/runtime/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["trade_mode"] == "live_shadow"
+        assert body["execution_route_effective"] == "shadow"
+
+    def test_status_returns_persisted_lock_enabled(self, tmp_path, monkeypatch):
+        database_url = f"sqlite:///{tmp_path}/control_lock.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        # Pre-populate a lock
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            repo.set_live_trading_lock(enabled=True, reason="maintenance")
+
+        client = TestClient(app)
+        response = client.get("/runtime/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["live_trading_lock_enabled"] is True
+
+    def test_defaults_when_db_empty(self, tmp_path, monkeypatch):
+        """Empty DB should return safe defaults for control plane fields."""
+        database_url = f"sqlite:///{tmp_path}/control_empty.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+
+        client = TestClient(app)
+        response = client.get("/runtime/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["trade_mode"] == "paper_auto"
+        assert body["live_trading_lock_enabled"] is False
+        assert body["execution_route_effective"] == "paper"
+
+
+class TestControlPlaneEndpoint:
+    """GET /runtime/control-plane returns read-only snapshot."""
+
+    def test_control_plane_returns_defaults_when_empty(self, tmp_path, monkeypatch):
+        database_url = f"sqlite:///{tmp_path}/cp_empty.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+
+        client = TestClient(app)
+        response = client.get("/runtime/control-plane")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["trade_mode"] == "paper_auto"
+        assert body["lock_enabled"] is False
+        assert body["lock_reason"] is None
+        assert body["execution_route"] == "paper"
+
+    def test_control_plane_returns_persisted_values(self, tmp_path, monkeypatch):
+        database_url = f"sqlite:///{tmp_path}/cp_persisted.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            repo.set_trade_mode("live_shadow")
+            repo.set_live_trading_lock(enabled=True, reason="upgrade")
+
+        client = TestClient(app)
+        response = client.get("/runtime/control-plane")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["trade_mode"] == "live_shadow"
+        assert body["lock_enabled"] is True
+        assert body["lock_reason"] == "upgrade"
+        assert body["execution_route"] == "shadow"
 

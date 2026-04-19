@@ -92,3 +92,44 @@ class Fill(Base):
     fee_usdt: Mapped[Decimal] = mapped_column(Numeric(28, 10), nullable=False)
     slippage_bps: Mapped[Decimal] = mapped_column(Numeric(28, 10), nullable=False)
     filled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class RuntimeControl(Base):
+    """Key-value store for runtime control-plane state (mode, lock, etc.)."""
+
+    __tablename__ = "runtime_control"
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class ShadowExecution(Base):
+    """Hypothetical execution plan/result recorded in live_shadow mode.
+
+    No real orders are placed. This table captures what *would* have been executed
+    for audit, analysis, and dashboard visibility.
+    """
+
+    __tablename__ = "shadow_executions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    side: Mapped[str] = mapped_column(String(10), nullable=False)
+    planned_notional_usdt: Mapped[Decimal] = mapped_column(Numeric(28, 10), nullable=False)
+    reference_price: Mapped[Decimal] = mapped_column(Numeric(28, 10), nullable=False)
+    simulated_fill_price: Mapped[Decimal] = mapped_column(Numeric(28, 10), nullable=False)
+    simulated_slippage_bps: Mapped[Decimal] = mapped_column(Numeric(28, 10), nullable=False)
+    decision_reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_cycle_status: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        index=True,
+    )

@@ -1,17 +1,41 @@
-"""In-memory runtime state for mode and lock management (paper-only)."""
+"""Runtime state backed by SQLite (paper-only milestone)."""
 
-from trading.execution.gate import TRADE_MODES, LiveTradingLock
+from typing import TYPE_CHECKING
 
-# Module-level runtime state — not persisted across restarts in this milestone
-_current_trade_mode: TRADE_MODES = "paper_auto"
-_current_lock = LiveTradingLock(enabled=False)
+from sqlalchemy.orm import Session
+
+from trading.execution.gate import TRADE_MODES
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import sessionmaker
+
+    from trading.execution.gate import LiveTradingLock
+
+# Default values when DB is empty or unavailable
+_DEFAULT_MODE: TRADE_MODES = "paper_auto"
 
 
-def get_trade_mode() -> TRADE_MODES:
-    """Return the current trade mode."""
-    return _current_trade_mode
+def get_trade_mode(session_factory: "sessionmaker[Session]") -> TRADE_MODES:
+    """Return the persisted trade mode for the given session factory.
+
+    Uses RuntimeControlRepository to read from the database.
+    Returns "paper_auto" if no row exists.
+    """
+    from trading.storage.repositories import RuntimeControlRepository
+
+    with session_factory() as session:
+        repo = RuntimeControlRepository(session)
+        return repo.get_trade_mode(default=_DEFAULT_MODE)
 
 
-def get_live_trading_lock() -> LiveTradingLock:
-    """Return the current live trading lock state."""
-    return _current_lock
+def get_live_trading_lock(session_factory: "sessionmaker[Session]") -> "LiveTradingLock":
+    """Return the persisted live trading lock for the given session factory.
+
+    Uses RuntimeControlRepository to read from the database.
+    Returns LiveTradingLock(enabled=False) if no row exists.
+    """
+    from trading.storage.repositories import RuntimeControlRepository
+
+    with session_factory() as session:
+        repo = RuntimeControlRepository(session)
+        return repo.get_live_trading_lock()
