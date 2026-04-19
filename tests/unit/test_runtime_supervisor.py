@@ -1,5 +1,6 @@
 """Unit tests for the supervisor module and supervisor CLI mode."""
 
+import threading
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -341,6 +342,54 @@ class TestRunSupervisor:
             f"Test took {elapsed:.2f}s — stop.set() may not have been called. "
             "Ingestion would have waited 1s for the stop signal."
         )
+
+    def test_does_not_raise_until_other_worker_exits_after_crash(self):
+        """Supervisor must wait for the non-crashed worker to fully exit before re-raising."""
+        stop_seen = threading.Event()
+        allow_ingest_exit = threading.Event()
+        run_finished = threading.Event()
+        result: dict[str, str] = {}
+
+        def fake_ingest_loop(**kwargs):
+            kwargs["stop_event"].wait(timeout=2)
+            stop_seen.set()
+            allow_ingest_exit.wait(timeout=2)
+
+        def fake_run_loop(**kwargs):
+            raise RuntimeError("trading crashed")
+
+        def run_target() -> None:
+            try:
+                run_supervisor(
+                    session_factory=make_session_factory(),
+                    ai_scorer=FakeAIScorer(),
+                    ingest_interval=300,
+                    trade_interval=300,
+                )
+            except RuntimeError as exc:
+                result["error"] = str(exc)
+            finally:
+                run_finished.set()
+
+        with patch("trading.runtime.supervisor.ingest_loop", side_effect=fake_ingest_loop):
+            with patch("trading.runtime.supervisor.run_loop", side_effect=fake_run_loop):
+                worker = threading.Thread(target=run_target, name="supervisor-test-runner")
+                worker.start()
+                assert stop_seen.wait(
+                    timeout=1
+                ), "ingestion worker did not receive stop signal"
+
+                # run_supervisor should still be blocked because ingestion has not exited yet.
+                assert not run_finished.is_set()
+                assert worker.is_alive()
+
+                allow_ingest_exit.set()
+                worker.join(timeout=2)
+                assert not worker.is_alive()
+                assert run_finished.is_set()
+                assert "trading crashed" in result.get("error", "")
+
+
 class TestSupervisorCLI:
     """CLI correctly parses --supervisor and related flags."""
 

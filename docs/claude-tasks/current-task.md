@@ -1,119 +1,159 @@
-# Claude Code Task: Fix Supervisor Crash Propagation + Docs Consistency
+# Claude Code Task: Milestone 6 Dashboard Completion (Read-Only, Paper-Only)
 
 You are the implementation worker for `/Users/zihanma/Desktop/crypto-ai-trader`.
 
 ## Goal
 
-Fix a high-risk supervisor lifecycle bug:
+Upgrade the dashboard from current single-page status view into a complete multi-page control room for paper trading operations:
 
-- If ingestion OR trading thread crashes, supervisor must immediately propagate stop to the other thread and exit deterministically (raise), never hang.
+- Overview
+- Signals
+- Orders
+- Risk
+- Analytics
+- Extensions
+- Logs
+- Settings
 
-Also fix a small docs inconsistency in root README CORS troubleshooting text.
+This milestone is **UI/API visibility only**. No trade execution controls, no live mode actions.
 
-## Findings To Address
+## Read First
 
-1. `trading/runtime/supervisor.py`
-   - In `_ingestion_target` / `_trading_target`, exceptions are captured but `stop` is not set.
-   - This can leave the other loop running forever in resident mode and block supervisor shutdown.
+- `/Users/zihanma/Desktop/crypto-ai-trader/dashboard/src/App.tsx`
+- `/Users/zihanma/Desktop/crypto-ai-trader/dashboard/src/api/client.ts`
+- `/Users/zihanma/Desktop/crypto-ai-trader/dashboard/src/styles.css`
+- `/Users/zihanma/Desktop/crypto-ai-trader/trading/main.py`
+- `/Users/zihanma/Desktop/crypto-ai-trader/trading/dashboard_api/routes_*.py`
+- `/Users/zihanma/Desktop/crypto-ai-trader/README.md`
+- `/Users/zihanma/Desktop/crypto-ai-trader/dashboard/README.md`
 
-2. `README.md`
-   - CORS section says whitelist includes both `127.0.0.1:5173` and `localhost:5173`,
-     but later text says “Only access localhost”.
-   - Align wording so both are valid (port must match Vite output).
+## Required Scope
 
-## Required Changes
+### 1) Frontend routing and page layout
 
-### A) Supervisor crash propagation (must fix)
+- Add a lightweight page-navigation structure (tab or sidebar) in React.
+- Implement pages:
+  - `Overview`
+  - `Signals`
+  - `Orders`
+  - `Risk`
+  - `Analytics`
+  - `Extensions`
+  - `Logs`
+  - `Settings`
+- Keep current dashboard visual constraints:
+  - no card-inside-card
+  - border radius <= 8px
+  - letter-spacing must be 0
+  - avoid dominant dark blue/slate single-tone palette
 
-In `trading/runtime/supervisor.py`:
+### 2) Data mapping per page (read-only)
 
-- When either worker catches an unexpected exception:
-  - keep recording `supervisor_component_error`
-  - set shared stop event immediately (`stop.set()`)
-- Main supervisor loop should then:
-  - wait for both threads to finish (reasonable bounded join strategy is fine)
-  - raise the captured exception(s) with current behavior (single or combined)
-- Ensure `supervisor_stopped` is recorded only after both threads are not alive.
-- Keep paper-only behavior unchanged.
+- Reuse existing APIs where possible.
+- Add only missing **GET** APIs if needed; no POST/PUT/DELETE.
 
-### B) Tests (must add/adjust)
+Required page content:
 
-Update `tests/unit/test_runtime_supervisor.py`:
+1. Overview
+   - Mode / live flag / risk state
+   - account metrics
+   - runtime heartbeat
+   - latest critical events
 
-- Add a regression test that proves:
-  - when one component raises,
-  - the other component receives stop signal (not just timeout-exit),
-  - supervisor returns/raises without hanging.
-- Use synchronization primitives (`Event`) to avoid flaky sleeps.
-- Keep all existing tests passing.
+2. Signals
+   - recent signal/cycle-related events
+   - candidate present/no-signal/rejected/executed counts (time-window summary)
+   - explicit reason fields where available
 
-### C) README consistency (small fix)
+3. Orders
+   - existing recent orders table
+   - last-hour and last-24h aggregates
 
-In `/Users/zihanma/Desktop/crypto-ai-trader/README.md` CORS troubleshooting section:
+4. Risk
+   - profile + thresholds (pct and USDT where available)
+   - current risk state + reason
+   - recent risk reject events
 
-- Replace “Only access localhost...” style wording with wording that clearly states:
-  - both `http://127.0.0.1:5173` and `http://localhost:5173` are valid,
-  - use the exact host+port shown by Vite.
+5. Analytics
+   - equity snapshot trend (simple line/list is fine; no heavy chart lib required)
+   - win/loss proxy stats derived from fills/orders/events
+   - daily pnl summary from available data
+
+6. Extensions
+   - render static disabled extension templates from design:
+     - FuturesMomentumTemplate
+     - OrderBookImbalanceTemplate
+     - CrossExchangeArbitrageTemplate
+     - NewsSentimentTemplate
+     - OnchainFlowTemplate
+     - MLSignalTemplate
+   - all shown as disabled/read-only with reason + next milestone
+
+7. Logs
+   - recent events feed with filtering by severity/component
+
+8. Settings
+   - read-only system settings summary
+   - explicit “paper mode only” safety notice
+   - no editable secrets, no execution toggles
+
+### 3) Degraded/offline behavior
+
+- Preserve and extend current partial-failure behavior:
+  - per-endpoint failure tracking
+  - failed panels show placeholders
+  - successful panels keep real data
+- Keep a visible degraded/offline banner when any critical endpoint fails.
+
+### 4) Backend (only if required for missing visibility)
+
+- If adding backend routes, keep them strictly read-only under `trading/dashboard_api/`.
+- Wire routers in `trading/main.py`.
+- Add integration tests for new endpoints.
 
 ## Safety Constraints (strict)
 
 - No live trading implementation.
-- No private Binance API integration.
-- No real API key usage.
-- No bypass of risk controls.
-- No order execution expansion beyond current paper flow.
+- No private Binance API usage.
+- No API key handling changes.
+- No order placement API.
+- Do not bypass RiskEngine / execution safety boundaries.
 
-## Verification (required)
+## Tests & Verification (required)
 
-Run exactly:
+Run:
 
 ```bash
 cd /Users/zihanma/Desktop/crypto-ai-trader
-.venv/bin/pytest tests/unit/test_runtime_supervisor.py -q
-.venv/bin/ruff check trading/runtime/supervisor.py tests/unit/test_runtime_supervisor.py README.md
-.venv/bin/pytest -q
 .venv/bin/ruff check .
-cd dashboard && npm run build && cd ..
+.venv/bin/pytest -q
+cd /Users/zihanma/Desktop/crypto-ai-trader/dashboard
+npm run build
+cd /Users/zihanma/Desktop/crypto-ai-trader
 git status --short
 ```
 
+If backend routes were added, include focused integration tests and run them explicitly too.
+
 ## Commit
 
-If verification passes, commit only relevant files:
+If verification passes:
 
 ```bash
 cd /Users/zihanma/Desktop/crypto-ai-trader
-git add trading/runtime/supervisor.py tests/unit/test_runtime_supervisor.py README.md docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
-git commit -m "fix: propagate supervisor stop on component crash"
+git add dashboard/src trading/dashboard_api trading/main.py tests README.md dashboard/README.md docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md
+git commit -m "feat: complete milestone 6 multi-page read-only dashboard"
 ```
 
 ## Completion Report
 
-Write `/Users/zihanma/Desktop/crypto-ai-trader/docs/claude-tasks/last-result.md` in this format:
+Write `/Users/zihanma/Desktop/crypto-ai-trader/docs/claude-tasks/last-result.md` with:
 
-```text
-# Last Claude Code Result
-
-Task: Fix Supervisor Crash Propagation + Docs Consistency
-Status: completed | failed
-
-Files changed:
-- ...
-
-Verification:
-- ...
-
-Commit:
-- ...
-
-Safety:
-- No live trading changes.
-- No private Binance API changes.
-- No API key handling changes.
-- Paper-only behavior preserved.
-
-Notes:
-- ...
-```
+- Task
+- Status
+- Files changed
+- Verification output summary
+- Commit hash
+- Safety checklist confirmation
 
 Then stop.

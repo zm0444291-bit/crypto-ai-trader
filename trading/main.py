@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
+from trading.dashboard_api.routes_analytics import router as analytics_router
 from trading.dashboard_api.routes_events import router as events_router
 from trading.dashboard_api.routes_health import router as health_router
 from trading.dashboard_api.routes_market_data import router as market_data_router
@@ -21,6 +22,7 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["*"],
 )
+app.include_router(analytics_router)
 app.include_router(events_router)
 app.include_router(health_router)
 app.include_router(market_data_router)

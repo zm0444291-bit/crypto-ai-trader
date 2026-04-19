@@ -105,10 +105,53 @@ export async function getRecentOrders(): Promise<{ orders: OrderSummary[] }> {
   return apiFetch<{ orders: OrderSummary[] }>('/orders/recent');
 }
 
-export async function getRecentEvents(): Promise<{ events: EventsSummary[] }> {
-  return apiFetch<{ events: EventsSummary[] }>('/events/recent');
+export async function getRecentEvents(opts?: {
+  limit?: number;
+  event_type?: string;
+}): Promise<{ events: EventsSummary[] }> {
+  const params = new URLSearchParams();
+  if (opts?.limit !== undefined) params.set('limit', String(opts.limit));
+  if (opts?.event_type) params.set('event_type', opts.event_type);
+  const query = params.toString();
+  return apiFetch<{ events: EventsSummary[] }>(`/events/recent${query ? '?' + query : ''}`);
 }
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   return apiFetch<RuntimeStatus>('/runtime/status');
+}
+
+// ── Analytics types ──────────────────────────────────────────────────────────
+
+export interface AnalyticsSummary {
+  current_equity_usdt: string;
+  day_start_equity_usdt: string;
+  daily_pnl_usdt: string;
+  daily_pnl_pct: string;
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate_pct: string;
+  avg_win_usdt: string;
+  avg_loss_usdt: string;
+  equity_snapshots: Array<{ timestamp: string; equity_usdt: string }>;
+  daily_pnl_history: Array<{ date: string; pnl_usdt: string }>;
+}
+
+export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
+  return apiFetch<AnalyticsSummary>('/analytics/summary');
+}
+
+export async function getRecentEventsFiltered(opts: {
+  limit?: number;
+  severity?: string;
+  component?: string;
+  event_type?: string;
+}): Promise<{ events: EventsSummary[] }> {
+  const params = new URLSearchParams();
+  if (opts.limit !== undefined) params.set('limit', String(opts.limit));
+  if (opts.severity) params.set('severity', opts.severity);
+  if (opts.component) params.set('component', opts.component);
+  if (opts.event_type) params.set('event_type', opts.event_type);
+  const query = params.toString();
+  return apiFetch<{ events: EventsSummary[] }>(`/events/recent${query ? '?' + query : ''}`);
 }

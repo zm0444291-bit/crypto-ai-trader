@@ -34,8 +34,21 @@ class EventsRepository:
         self.session.refresh(event)
         return event
 
-    def list_recent(self, limit: int = 50) -> list[Event]:
-        statement = select(Event).order_by(desc(Event.id)).limit(limit)
+    def list_recent(
+        self,
+        limit: int = 50,
+        severity: str | None = None,
+        component: str | None = None,
+        event_type: str | None = None,
+    ) -> list[Event]:
+        statement = select(Event)
+        if severity is not None:
+            statement = statement.where(Event.severity == severity)
+        if component is not None:
+            statement = statement.where(Event.component == component)
+        if event_type is not None:
+            statement = statement.where(Event.event_type == event_type)
+        statement = statement.order_by(desc(Event.id)).limit(limit)
         return list(self.session.scalars(statement))
 
     def get_latest_event_by_type(self, event_type: str) -> Event | None:

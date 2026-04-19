@@ -326,3 +326,261 @@ body {
   color: var(--text-muted);
   font-family: var(--mono);
 }
+
+/* ── Navigation ──────────────────────────────────────────────────────────── */
+.main-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 12px;
+}
+
+.nav-link {
+  padding: 5px 12px;
+  border-radius: var(--r);
+  font-size: 0.78rem;
+  font-family: var(--mono);
+  color: var(--text-muted);
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.nav-link:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.nav-link-active {
+  color: var(--accent);
+  border-color: rgba(0, 212, 170, 0.3);
+  background: rgba(0, 212, 170, 0.06);
+}
+
+/* ── Page layout ─────────────────────────────────────────────────────────── */
+.page { padding: 0; }
+
+/* ── Signal status badges ────────────────────────────────────────────────── */
+.signal-present    { color: var(--positive); }
+.signal-no-signal  { color: var(--text-muted); }
+.signal-rejected   { color: var(--negative); }
+.signal-executed   { color: var(--accent); }
+
+/* ── Aggregate bar ────────────────────────────────────────────────────────── */
+.aggregate-bar {
+  display: flex;
+  gap: 16px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  margin-bottom: 12px;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  flex-wrap: wrap;
+}
+
+.aggregate-bar .agg-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.aggregate-bar .agg-label {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.aggregate-bar .agg-value {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ── Extension grid ───────────────────────────────────────────────────────── */
+.extensions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+}
+
+.extension-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 16px;
+  opacity: 0.5;
+}
+
+.extension-card .ext-name {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.extension-card .ext-desc {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+.extension-card .ext-badge {
+  display: inline-flex;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  background: rgba(136, 136, 136, 0.1);
+  color: var(--text-muted);
+  border: 1px solid rgba(136, 136, 136, 0.2);
+}
+
+/* ── Risk thresholds table ───────────────────────────────────────────────── */
+.thresholds-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.threshold-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 12px;
+}
+
+.threshold-card .thresh-name {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.threshold-card .thresh-pct {
+  font-family: var(--mono);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.threshold-card .thresh-usdt {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* ── Analytics grid ──────────────────────────────────────────────────────── */
+.analytics-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+@media (min-width: 640px) {
+  .analytics-metrics { grid-template-columns: repeat(4, 1fr); }
+}
+
+/* ── Filter bar ──────────────────────────────────────────────────────────── */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.filter-select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.filter-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ── Settings page ───────────────────────────────────────────────────────── */
+.settings-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+
+.settings-section .settings-title {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-size: 0.82rem;
+}
+
+.settings-row .row-label {
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
+
+.settings-row .row-value {
+  color: var(--text);
+  font-family: var(--mono);
+}
+
+/* ── Equity snapshots list ───────────────────────────────────────────────── */
+.snapshot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+.snapshot-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 6px;
+  background: var(--surface2);
+  border-radius: 3px;
+}
+
+.snapshot-row .snapshot-date { color: var(--text-muted); }
+.snapshot-row .snapshot-equity { color: var(--text); font-weight: 600; }
+.snapshot-row.positive .snapshot-equity { color: var(--positive); }
+.snapshot-row.negative .snapshot-equity { color: var(--negative); }
+
+/* ── Safety notice in settings ─────────────────────────────────────────── */
+.safety-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px;
+  background: rgba(0, 212, 170, 0.05);
+  border: 1px solid rgba(0, 212, 170, 0.15);
+  border-radius: var(--r);
+  margin-bottom: 16px;
+  font-size: 0.82rem;
+  color: var(--accent);
+  line-height: 1.5;
+}
