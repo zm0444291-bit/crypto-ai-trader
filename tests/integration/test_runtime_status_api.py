@@ -541,3 +541,276 @@ class TestRuntimeStatusShadowFields:
         assert body["last_shadow_time"] is None
 
 
+class TestControlPlaneWriteMode:
+    """POST /runtime/control-plane/mode — safe, audited mode changes."""
+
+    def test_legal_transition_paper_auto_to_live_shadow(self, tmp_path, monkeypatch):
+        """paper_auto -> live_shadow is allowed and persists."""
+        database_url = f"sqlite:///{tmp_path}/mode_cp1.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+
+        client = TestClient(app)
+
+        # Start in paper_auto (default)
+        response = client.post(
+            "/runtime/control-plane/mode",
+            json={"to_mode": "live_shadow", "reason": "operator request"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["current_mode"] == "live_shadow"
+        assert body["guard_reason"] == "transition_allowed"
+
+    def test_illegal_transition_paused_to_live_small_auto(self, tmp_path, monkeypatch):
+        """paused -> live_small_auto is blocked by validate_mode_transition."""
+        database_url = f"sqlite:///{tmp_path}/mode_cp2.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        # Pre-set mode to paused
+        with session_factory() as session:
+            RuntimeControlRepository(session).set_trade_mode("paused")
+
+        client = TestClient(app)
+        response = client.post(
+            "/runtime/control-plane/mode",
+            json={"to_mode": "live_small_auto", "reason": "try live"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert "blocked" in body["guard_reason"]
+        assert "live_small_auto" in body["guard_reason"]
+
+    def test_paper_auto_to_live_small_auto_blocked_without_unlock(self, tmp_path, monkeypatch):
+        """paper_auto -> live_small_auto requires allow_live_unlock=true."""
+        database_url = f"sqlite:///{tmp_path}/mode_cp3.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+
+        client = TestClient(app)
+        response = client.post(
+            "/runtime/control-plane/mode",
+            json={"to_mode": "live_small_auto", "allow_live_unlock": False},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert "blocked" in body["guard_reason"]
+
+    def test_same_mode_is_noop(self, tmp_path, monkeypatch):
+        """Setting the same mode returns success without change."""
+        database_url = f"sqlite:///{tmp_path}/mode_cp4.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        with session_factory() as session:
+            RuntimeControlRepository(session).set_trade_mode("paper_auto")
+
+        client = TestClient(app)
+        response = client.post(
+            "/runtime/control-plane/mode",
+            json={"to_mode": "paper_auto"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["current_mode"] == "paper_auto"
+        assert body["guard_reason"] == "same_mode"
+
+    def test_mode_change_creates_audit_event(self, tmp_path, monkeypatch):
+        """Successful mode change records a runtime_mode_changed event."""
+        database_url = f"sqlite:///{tmp_path}/mode_cp5.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        client = TestClient(app)
+
+        # legal transition: paper_auto -> live_shadow
+        client.post(
+            "/runtime/control-plane/mode",
+            json={"to_mode": "live_shadow", "reason": "testing"},
+        )
+
+        # Verify event was recorded
+        with session_factory() as session:
+            events = EventsRepository(session).list_recent(limit=10)
+            mode_events = [e for e in events if e.event_type == "runtime_mode_changed"]
+            assert len(mode_events) == 1
+            ctx = mode_events[0].context_json
+            assert ctx["before_mode"] == "paper_auto"
+            assert ctx["after_mode"] == "live_shadow"
+            assert ctx["operator_source"] == "api"
+
+    def test_mode_change_fail_closed_on_unavailable_db(self, monkeypatch):
+        """When DB is unavailable, mode change returns fail-closed."""
+        monkeypatch.setenv("DATABASE_URL", "/nonexistent/path/xxx.db")
+        client = TestClient(app)
+
+        response = client.post(
+            "/runtime/control-plane/mode",
+            json={"to_mode": "live_shadow"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert body["guard_reason"] == "blocked: unavailable"
+        assert body["current_mode"] == "paper_auto"
+
+
+class TestControlPlaneWriteLiveLock:
+    """POST /runtime/control-plane/live-lock — safe, audited lock changes."""
+
+    def test_enable_lock_succeeds(self, tmp_path, monkeypatch):
+        """Enabling the live lock succeeds and persists."""
+        database_url = f"sqlite:///{tmp_path}/lock_cp1.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+
+        client = TestClient(app)
+
+        response = client.post(
+            "/runtime/control-plane/live-lock",
+            json={"enabled": True, "reason": "operator request"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["lock_enabled"] is True
+
+    def test_disable_lock_succeeds(self, tmp_path, monkeypatch):
+        """Disabling the live lock succeeds and persists."""
+        database_url = f"sqlite:///{tmp_path}/lock_cp2.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        # Pre-enable lock
+        with session_factory() as session:
+            RuntimeControlRepository(session).set_live_trading_lock(
+                enabled=True, reason="initial"
+            )
+
+        client = TestClient(app)
+
+        response = client.post(
+            "/runtime/control-plane/live-lock",
+            json={"enabled": False, "reason": "done"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["lock_enabled"] is False
+
+    def test_lock_change_creates_audit_event(self, tmp_path, monkeypatch):
+        """Successful lock change records a runtime_live_lock_changed event."""
+        database_url = f"sqlite:///{tmp_path}/lock_cp3.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        client = TestClient(app)
+
+        client.post(
+            "/runtime/control-plane/live-lock",
+            json={"enabled": True, "reason": "testing"},
+        )
+
+        with session_factory() as session:
+            events = EventsRepository(session).list_recent(limit=10)
+            lock_events = [
+                e for e in events if e.event_type == "runtime_live_lock_changed"
+            ]
+            assert len(lock_events) == 1
+            ctx = lock_events[0].context_json
+            assert ctx["before_enabled"] is False
+            assert ctx["after_enabled"] is True
+            assert ctx["operator_source"] == "api"
+
+    def test_lock_change_fail_closed_on_unavailable_db(self, monkeypatch):
+        """When DB is unavailable, lock change returns fail-closed."""
+        monkeypatch.setenv("DATABASE_URL", "/nonexistent/path/xxx.db")
+        client = TestClient(app)
+
+        response = client.post(
+            "/runtime/control-plane/live-lock",
+            json={"enabled": True},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert body["reason"] == "blocked: unavailable"
+
+
+class TestControlPlaneWriteConsistency:
+    """After a write, GET /runtime/status and /runtime/control-plane reflect the change."""
+
+    def test_mode_write_visible_in_status_and_control_plane(self, tmp_path, monkeypatch):
+        """After changing mode, both read endpoints reflect the new mode."""
+        database_url = f"sqlite:///{tmp_path}/consist_cp1.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+
+        client = TestClient(app)
+
+        # Change mode to live_shadow
+        client.post(
+            "/runtime/control-plane/mode",
+            json={"to_mode": "live_shadow"},
+        )
+
+        # Check /runtime/status
+        status_resp = client.get("/runtime/status")
+        assert status_resp.json()["trade_mode"] == "live_shadow"
+        assert status_resp.json()["execution_route_effective"] == "shadow"
+
+        # Check /runtime/control-plane
+        cp_resp = client.get("/runtime/control-plane")
+        assert cp_resp.json()["trade_mode"] == "live_shadow"
+        assert cp_resp.json()["execution_route"] == "shadow"
+
+    def test_lock_write_visible_in_status_and_control_plane(self, tmp_path, monkeypatch):
+        """After enabling lock, both read endpoints reflect lock_enabled=True."""
+        database_url = f"sqlite:///{tmp_path}/consist_cp2.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+
+        client = TestClient(app)
+
+        # Enable lock
+        client.post(
+            "/runtime/control-plane/live-lock",
+            json={"enabled": True, "reason": "testing"},
+        )
+
+        # Check /runtime/status
+        status_resp = client.get("/runtime/status")
+        assert status_resp.json()["live_trading_lock_enabled"] is True
+
+        # Check /runtime/control-plane
+        cp_resp = client.get("/runtime/control-plane")
+        assert cp_resp.json()["lock_enabled"] is True
+

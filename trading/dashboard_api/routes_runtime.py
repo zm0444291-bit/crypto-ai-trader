@@ -14,6 +14,7 @@ from trading.storage.db import create_database_engine, create_session_factory, i
 from trading.storage.repositories import (
     EventsRepository,
     ExecutionRecordsRepository,
+    RuntimeControlRepository,
     ShadowExecutionRepository,
 )
 
@@ -228,7 +229,7 @@ def read_runtime_status() -> RuntimeStatusResponse:
 class ModeChangeRequest(BaseModel):
     """Request body for changing the trade mode."""
 
-    mode: TRADE_MODES
+    to_mode: TRADE_MODES
     allow_live_unlock: bool = False
     reason: str | None = None
 
@@ -237,8 +238,8 @@ class ModeChangeResponse(BaseModel):
     """Structured response for mode change operations."""
 
     success: bool
-    trade_mode: str
-    reason: str
+    current_mode: str
+    guard_reason: str
 
 
 class LiveLockChangeRequest(BaseModel):
@@ -275,18 +276,26 @@ def set_mode(body: ModeChangeRequest) -> ModeChangeResponse:
         init_db(engine)
         session_factory = create_session_factory(engine)
     except Exception as exc:
-        return ModeChangeResponse(success=False, trade_mode="paper_auto", reason=str(exc))
+        return ModeChangeResponse(
+            success=False,
+            current_mode="paper_auto",
+            guard_reason="blocked: unavailable",
+        )
 
     try:
         current_mode = get_trade_mode(session_factory)
         lock_state = get_live_trading_lock(session_factory)
 
-        if current_mode == body.mode:
-            return ModeChangeResponse(success=True, trade_mode=current_mode, reason="same_mode")
+        if current_mode == body.to_mode:
+            return ModeChangeResponse(
+                success=True,
+                current_mode=current_mode,
+                guard_reason="same_mode",
+            )
 
         guard = validate_mode_transition(
             current_mode,
-            body.mode,
+            body.to_mode,
             lock_enabled=lock_state.enabled,
             allow_live_unlock=body.allow_live_unlock,
         )
@@ -294,24 +303,41 @@ def set_mode(body: ModeChangeRequest) -> ModeChangeResponse:
         if not guard.allowed:
             return ModeChangeResponse(
                 success=False,
-                trade_mode=current_mode,
-                reason=guard.reason,
+                current_mode=current_mode,
+                guard_reason=guard.reason,
             )
 
         with session_factory() as session:
-            from trading.storage.repositories import RuntimeControlRepository
-
+            events_repo = EventsRepository(session)
             repo = RuntimeControlRepository(session)
-            repo.set_trade_mode(body.mode)
+            before_mode = repo.get_trade_mode()
+            repo.set_trade_mode(body.to_mode)
             new_mode = repo.get_trade_mode()
+
+            events_repo.record_event(
+                event_type="runtime_mode_changed",
+                severity="info",
+                component="control_plane",
+                message=f"Mode changed: {before_mode} -> {new_mode}",
+                context={
+                    "before_mode": before_mode,
+                    "after_mode": new_mode,
+                    "operator_source": "api",
+                    "operator_reason": body.reason,
+                },
+            )
 
         return ModeChangeResponse(
             success=True,
-            trade_mode=new_mode,
-            reason=guard.reason,
+            current_mode=new_mode,
+            guard_reason=guard.reason,
         )
     except Exception as exc:
-        return ModeChangeResponse(success=False, trade_mode="paper_auto", reason=str(exc))
+        return ModeChangeResponse(
+            success=False,
+            current_mode="paper_auto",
+            guard_reason="blocked: unavailable",
+        )
 
 
 @router.post("/runtime/control-plane/live-lock", response_model=LiveLockChangeResponse)
@@ -323,15 +349,32 @@ def set_live_lock(body: LiveLockChangeRequest) -> LiveLockChangeResponse:
         init_db(engine)
         session_factory = create_session_factory(engine)
     except Exception as exc:
-        return LiveLockChangeResponse(success=False, lock_enabled=False, reason=str(exc))
+        return LiveLockChangeResponse(
+            success=False,
+            lock_enabled=False,
+            reason="blocked: unavailable",
+        )
 
     try:
         with session_factory() as session:
-            from trading.storage.repositories import RuntimeControlRepository
-
+            events_repo = EventsRepository(session)
             repo = RuntimeControlRepository(session)
+            before_lock = repo.get_live_trading_lock()
             repo.set_live_trading_lock(enabled=body.enabled, reason=body.reason)
             lock = repo.get_live_trading_lock()
+
+            events_repo.record_event(
+                event_type="runtime_live_lock_changed",
+                severity="info",
+                component="control_plane",
+                message=f"Live lock changed: {before_lock.enabled} -> {body.enabled}",
+                context={
+                    "before_enabled": before_lock.enabled,
+                    "after_enabled": lock.enabled,
+                    "operator_source": "api",
+                    "operator_reason": body.reason,
+                },
+            )
 
         return LiveLockChangeResponse(
             success=True,
@@ -339,7 +382,11 @@ def set_live_lock(body: LiveLockChangeRequest) -> LiveLockChangeResponse:
             reason=lock.reason or "ok",
         )
     except Exception as exc:
-        return LiveLockChangeResponse(success=False, lock_enabled=False, reason=str(exc))
+        return LiveLockChangeResponse(
+            success=False,
+            lock_enabled=False,
+            reason="blocked: unavailable",
+        )
 
 
 @router.get("/runtime/control-plane", response_model=ControlPlaneResponse)
