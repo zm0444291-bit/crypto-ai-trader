@@ -1,25 +1,21 @@
 # Last Claude Code Result
 
-Task: Dashboard Local Connectivity And UI Compliance Repair
+Task: Dashboard Partial API Failure Visibility
 Status: completed
 
 Files changed:
-- trading/main.py (CORS middleware added)
-- tests/integration/test_app_smoke.py (3 new CORS tests)
-- dashboard/src/App.tsx (real offline placeholder data)
-- dashboard/src/styles.css (neutral dark palette, letter-spacing: 0)
-- .gitignore (.omc/ added)
+- dashboard/src/App.tsx (per-panel failure tracking)
 - docs/claude-tasks/last-result.md (updated)
 
 Verification:
-- `cd dashboard && npm run build` — succeeded (tsc + vite build, 245ms)
+- `cd dashboard && npm run build` — succeeded (tsc + vite build, 243ms)
 - `ruff check .` — all checks passed
-- `pytest -q` — 148 passed in 0.39s
-- `git status --short` — no .omc/ in output
+- `pytest -q` — 148 passed in 0.43s
+- `git status --short` — clean (only App.tsx and current-task.md)
 
 Commit:
-- `git add .gitignore trading/main.py tests dashboard docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md`
-- `git commit -m "fix: repair dashboard local connectivity"`
+- `git add dashboard/src/App.tsx docs/claude-tasks/current-task.md docs/claude-tasks/last-result.md`
+- `git commit -m "fix: show dashboard partial API failures"`
 
 Safety:
 - No order execution added.
@@ -29,7 +25,7 @@ Safety:
 - Dashboard remains read-only.
 
 Notes:
-- CORS: FastAPI CORSMiddleware allows http://127.0.0.1:5173 and http://localhost:5173 only, GET methods only.
-- Offline placeholders: paper_auto / Disabled / normal / small_balanced / $500 equity / $500 cash / +0.00% PnL / $7.50 max risk + placeholder event.
-- CSS: neutral dark graphite (#0D0D0D) base, all letter-spacing set to 0.
-- .omc/ added to .gitignore.
+- Replaced `offline = !health && !risk && ...` with per-panel `failures` state.
+- `hasApiFailure = Object.values(failures).some(Boolean)` drives the offline notice.
+- Each panel receives null/placeholder only when its own API failed, preserving real data from successful calls.
+- EventsSection shows placeholder event when `/events/recent` itself fails.

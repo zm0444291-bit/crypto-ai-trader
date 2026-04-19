@@ -340,35 +340,50 @@ function EventsSection({
 
 // ── App ───────────────────────────────────────────────────────────────────────
 
+type ApiFailures = {
+  health: boolean;
+  risk: boolean;
+  portfolio: boolean;
+  orders: boolean;
+  events: boolean;
+};
+
 export default function App() {
   const [health,    setHealth]    = useState<HealthStatus | null>(null);
   const [risk,      setRisk]      = useState<RiskStatus | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioStatus | null>(null);
   const [orders,    setOrders]    = useState<OrderSummary[] | null>(null);
   const [events,    setEvents]    = useState<EventsSummary[] | null>(null);
+  const [failures,  setFailures]  = useState<ApiFailures>({
+    health: false,
+    risk: false,
+    portfolio: false,
+    orders: false,
+    events: false,
+  });
 
-  const offline = !health && !risk && !portfolio && !orders && !events;
+  const hasApiFailure = Object.values(failures).some(Boolean);
 
   useEffect(() => {
     getHealth()
       .then(setHealth)
-      .catch(() => {});
+      .catch(() => setFailures((f) => ({ ...f, health: true })));
 
     getRiskStatus(500, 500)
       .then(setRisk)
-      .catch(() => {});
+      .catch(() => setFailures((f) => ({ ...f, risk: true })));
 
     getPortfolioStatus(500)
       .then(setPortfolio)
-      .catch(() => {});
+      .catch(() => setFailures((f) => ({ ...f, portfolio: true })));
 
     getRecentOrders()
       .then((r) => setOrders(r.orders))
-      .catch(() => {});
+      .catch(() => setFailures((f) => ({ ...f, orders: true })));
 
     getRecentEvents()
       .then((r) => setEvents(r.events))
-      .catch(() => {});
+      .catch(() => setFailures((f) => ({ ...f, events: true })));
   }, []);
 
   return (
@@ -379,14 +394,22 @@ export default function App() {
 
       <SafetyBanner />
 
-      {offline && <OfflineNotice />}
+      {hasApiFailure && <OfflineNotice />}
 
-      <StatusStrip health={health} risk={risk} isOffline={offline} />
+      <StatusStrip
+        health={failures.health ? null : health}
+        risk={failures.risk ? null : risk}
+        isOffline={hasApiFailure}
+      />
 
-      <MetricsGrid portfolio={portfolio} risk={risk} isOffline={offline} />
-      <PositionsSection positions={portfolio?.positions ?? null} />
-      <OrdersSection orders={orders} />
-      <EventsSection events={events} isPlaceholder={offline} />
+      <MetricsGrid
+        portfolio={failures.portfolio ? null : portfolio}
+        risk={failures.risk ? null : risk}
+        isOffline={hasApiFailure}
+      />
+      <PositionsSection positions={failures.portfolio ? null : (portfolio?.positions ?? null)} />
+      <OrdersSection orders={failures.orders ? null : orders} />
+      <EventsSection events={events} isPlaceholder={failures.events} />
     </div>
   );
 }
