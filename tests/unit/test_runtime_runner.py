@@ -336,14 +336,14 @@ class TestDayBaseline:
 
     def test_same_day_baseline_reuse(self):
         """Second call on the same UTC day returns the stored baseline, not current equity."""
-        from datetime import UTC, date, datetime
+        from datetime import UTC, datetime
         from decimal import Decimal
         from unittest.mock import MagicMock, patch
 
         from trading.runtime.runner import _get_or_create_day_baseline
 
-        today_str = str(date.today())
         now = datetime.now(UTC)
+        today_str = str(now.date())
 
         stored_event = MagicMock()
         stored_event.event_type = "day_baseline_set"
@@ -368,15 +368,15 @@ class TestDayBaseline:
 
     def test_next_day_baseline_rotates(self):
         """When the most recent baseline is from a prior UTC day, a new one is created."""
-        from datetime import UTC, date, datetime, timedelta
+        from datetime import UTC, datetime, timedelta
         from decimal import Decimal
         from unittest.mock import MagicMock, patch
 
         from trading.runtime.runner import _get_or_create_day_baseline
 
-        yesterday = str(date.today() - timedelta(days=1))
-        today_str = str(date.today())
         now = datetime.now(UTC)
+        today_str = str(now.date())
+        yesterday = str((now - timedelta(days=1)).date())
 
         old_event = MagicMock()
         old_event.event_type = "day_baseline_set"
