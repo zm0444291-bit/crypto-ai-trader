@@ -10,7 +10,8 @@ def test_market_data_status_returns_configured_symbols_and_timeframes():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "configured"
+    # Status reflects data freshness: fresh/stale when candles exist, unknown when DB is unavailable
+    assert body["status"] in ("fresh", "stale", "unknown")
     assert body["live_trading_enabled"] is False
     assert body["symbols"] == ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
     assert body["timeframes"] == ["15m", "1h", "4h"]
