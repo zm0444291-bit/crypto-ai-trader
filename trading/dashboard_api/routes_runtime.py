@@ -13,6 +13,14 @@ from trading.storage.repositories import EventsRepository, ExecutionRecordsRepos
 router = APIRouter(tags=["runtime"])
 
 
+def _to_aware_utc(ts: datetime | None) -> datetime | None:
+    if ts is None:
+        return None
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=UTC)
+    return ts.astimezone(UTC)
+
+
 class RuntimeStatusResponse(BaseModel):
     last_cycle_status: str | None
     last_cycle_time: datetime | None
@@ -55,9 +63,8 @@ def read_runtime_status() -> RuntimeStatusResponse:
             last_component_error=None,
         )
 
-    # Use naive UTC to match how SQLite stores datetimes (no TZ info)
-    now = datetime.now(UTC).replace(tzinfo=None)
-    cutoff = now - timedelta(hours=1)
+    now = datetime.now(UTC)
+    one_hour_ago = now - timedelta(hours=1)
 
     try:
         with session_factory() as session:
@@ -88,13 +95,17 @@ def read_runtime_status() -> RuntimeStatusResponse:
                 1
                 for e in reversed(all_events)
                 if e.event_type == "cycle_started"
-                and e.created_at >= cutoff
+                and (_to_aware_utc(e.created_at) or datetime.min.replace(tzinfo=UTC))
+                >= one_hour_ago
             )
 
             # ── orders_last_hour: count orders created in the last hour ──
             recent_orders = exec_repo.list_recent_orders(limit=500)
             orders_last_hour = sum(
-                1 for o in recent_orders if o.created_at >= cutoff
+                1
+                for o in recent_orders
+                if (_to_aware_utc(o.created_at) or datetime.min.replace(tzinfo=UTC))
+                >= one_hour_ago
             )
 
             # ── supervisor heartbeat fields (2-minute freshness window) ──
@@ -112,16 +123,19 @@ def read_runtime_status() -> RuntimeStatusResponse:
                     break
 
             if most_recent_heartbeat is not None:
-                hb_created = most_recent_heartbeat.created_at
+                hb_created = _to_aware_utc(most_recent_heartbeat.created_at)
                 last_heartbeat_time = hb_created.isoformat() if hb_created else None
                 if hb_created and hb_created >= heartbeat_cutoff:
                     supervisor_alive = True
                 elif hb_created:
                     supervisor_alive = False
                 ctx = most_recent_heartbeat.context_json or {}
-                ingestion_thread_alive = ctx.get("ingest_thread_alive")
-                trading_thread_alive = ctx.get("trading_thread_alive")
-                uptime_seconds = ctx.get("uptime_seconds")
+                _raw = ctx.get("ingest_thread_alive")
+                ingestion_thread_alive = bool(_raw) if _raw is not None else None
+                _raw = ctx.get("trading_thread_alive")
+                trading_thread_alive = bool(_raw) if _raw is not None else None
+                _raw = ctx.get("uptime_seconds")
+                uptime_seconds = int(_raw) if _raw is not None else None
 
             # ── last_component_error: most recent supervisor_component_error ──
             last_component_error: str | None = None
