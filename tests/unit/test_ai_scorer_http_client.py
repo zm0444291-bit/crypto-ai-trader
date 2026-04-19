@@ -1,6 +1,6 @@
 """Unit tests for HttpAIScoringClient."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -45,11 +45,13 @@ class TestHttpAIScoringClientValidResponse:
             "explanation": "Momentum is strong.",
         }
 
-        with patch("trading.ai.http_client.httpx.post") as mock_post:
-            mock_post.return_value.__enter__ = lambda s: s
-            mock_post.return_value.__exit__ = lambda *a: None
-            mock_post.return_value.raise_for_status = lambda: None
-            mock_post.return_value.json = lambda: mock_response
+        mock_response_obj = MagicMock()
+        mock_response_obj.raise_for_status = lambda: None
+        mock_response_obj.json = lambda: mock_response
+
+        with patch("trading.ai.http_client.httpx.Client") as mock_client_cls:
+            mock_client_instance = mock_client_cls.return_value.__enter__.return_value
+            mock_client_instance.post.return_value = mock_response_obj
 
             result = client.score({"candidate": {}})
 
@@ -68,14 +70,15 @@ class TestHttpAIScoringClientErrors:
 
         client = HttpAIScoringClient()
 
-        with patch("trading.ai.http_client.httpx.post") as mock_post:
-            mock_post.side_effect = httpx.TimeoutException("timed out")
+        with patch("trading.ai.http_client.httpx.Client") as mock_client_cls:
+            mock_client_instance = mock_client_cls.return_value.__enter__.return_value
+            mock_client_instance.post.side_effect = httpx.TimeoutException("timed out")
 
             with pytest.raises(httpx.TimeoutException):
                 client.score({"candidate": {}})
 
     def test_http_error_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import requests
+        import httpx
 
         monkeypatch.setenv("AI_SCORING_URL", "https://ai.example.com/score")
 
@@ -83,10 +86,13 @@ class TestHttpAIScoringClientErrors:
 
         client = HttpAIScoringClient()
 
-        with patch("trading.ai.http_client.httpx.post") as mock_post:
-            mock_post.side_effect = requests.HTTPError("500 Server Error")
+        with patch("trading.ai.http_client.httpx.Client") as mock_client_cls:
+            mock_client_instance = mock_client_cls.return_value.__enter__.return_value
+            mock_client_instance.post.side_effect = httpx.HTTPStatusError(
+                "500 Server Error", request=MagicMock(), response=MagicMock()
+            )
 
-            with pytest.raises(requests.HTTPError):
+            with pytest.raises(httpx.HTTPStatusError):
                 client.score({"candidate": {}})
 
 
@@ -124,8 +130,9 @@ class TestHttpAIScoringClientAiscoreIntegration:
         client = HttpAIScoringClient()
         scorer = AIScorer(client)
 
-        with patch("trading.ai.http_client.httpx.post") as mock_post:
-            mock_post.side_effect = httpx.TimeoutException("timed out")
+        with patch("trading.ai.http_client.httpx.Client") as mock_client_cls:
+            mock_client_instance = mock_client_cls.return_value.__enter__.return_value
+            mock_client_instance.post.side_effect = httpx.TimeoutException("timed out")
 
             result = scorer.score_candidate(
                 candidate=_make_candidate(),

@@ -18,15 +18,19 @@ class BinanceKlineClient:
 
     def fetch_klines(self, symbol: str, interval: str, limit: int = 100) -> list[CandleData]:
         """Fetch public spot klines from Binance and return normalized candles."""
-        client = self._client or httpx.Client(base_url=self.base_url)
+        if self._client is not None:
+            client = self._client
+        else:
+            client = httpx.Client(base_url=self.base_url)
         try:
             response = client.get(
                 "/api/v3/klines",
                 params={"symbol": symbol, "interval": interval, "limit": limit},
             )
             response.raise_for_status()
-        except httpx.HTTPStatusError:
-            raise
+        finally:
+            if self._client is None:
+                client.close()
         data: list[list[Any]] = response.json()
         return [self._parse_kline(kline, symbol, interval) for kline in data]
 

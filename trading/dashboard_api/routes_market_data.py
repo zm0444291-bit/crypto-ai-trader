@@ -1,8 +1,15 @@
 """Dashboard API routes for market data."""
 
 from datetime import UTC, datetime
+from functools import lru_cache
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from sqlalchemy.orm import Session
 
 from trading.market_data.candle_service import SYMBOLS, TIMEFRAMES, MarketDataStatus
 from trading.runtime.config import AppSettings
@@ -19,6 +26,15 @@ _STALE_THRESHOLD_SECONDS: dict[str, int] = {
 }
 
 
+@lru_cache(maxsize=1)
+def _get_session_factory() -> "Callable[[], Session]":
+    """Return a cached session factory for the API (engine lives for process lifetime)."""
+    settings = AppSettings()
+    engine = create_database_engine(settings.database_url)
+    init_db(engine)
+    return create_session_factory(engine)
+
+
 def _is_fresh(latest_ts: datetime | None, timeframe: str) -> bool:
     if latest_ts is None:
         return False
@@ -29,11 +45,7 @@ def _is_fresh(latest_ts: datetime | None, timeframe: str) -> bool:
 
 def _build_market_data_status() -> MarketDataStatus:
     try:
-        settings = AppSettings()
-        engine = create_database_engine(settings.database_url)
-        init_db(engine)
-        session_factory = create_session_factory(engine)
-
+        session_factory = _get_session_factory()
         with session_factory() as session:
             repo = CandlesRepository(session)
             latest: dict[str, datetime | None] = {}
@@ -44,8 +56,11 @@ def _build_market_data_status() -> MarketDataStatus:
                         candle.open_time if candle else None
                     )
 
-        latest_times = [latest.get(f"{s}/{tf}") for s in SYMBOLS for tf in TIMEFRAMES]
-        any_fresh = any(_is_fresh(ts, tf) for tf in TIMEFRAMES for ts in latest_times)
+        any_fresh = any(
+            _is_fresh(latest.get(f"{s}/{tf}"), tf)
+            for s in SYMBOLS
+            for tf in TIMEFRAMES
+        )
         status_value = "fresh" if any_fresh else "stale"
 
         return MarketDataStatus(

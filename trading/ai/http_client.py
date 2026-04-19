@@ -31,12 +31,15 @@ class HttpAIScoringClient:
     def __init__(
         self,
         url: str | None = None,
-        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        timeout: float | None = None,
     ) -> None:
         self._url = (url or os.environ.get("AI_SCORING_URL", "")).strip() or None
-        self._timeout: float = float(
-            os.environ.get("AI_SCORING_TIMEOUT", str(DEFAULT_TIMEOUT_SECONDS)).strip()
-        )
+        if timeout is not None:
+            self._timeout = timeout
+        else:
+            self._timeout = float(
+                os.environ.get("AI_SCORING_TIMEOUT", str(DEFAULT_TIMEOUT_SECONDS)).strip()
+            )
 
     def score(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Call the remote AI scoring endpoint.
@@ -53,11 +56,11 @@ class HttpAIScoringClient:
                 "Set the environment variable to enable remote scoring."
             )
 
-        with httpx.post(
-            self._url,
-            json=payload,
-            timeout=self._timeout,
-            headers={"Content-Type": "application/json"},
-        ) as resp:
+        with httpx.Client(timeout=self._timeout) as client:
+            resp = client.post(
+                self._url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
             resp.raise_for_status()
             return resp.json()

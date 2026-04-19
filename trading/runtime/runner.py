@@ -96,7 +96,10 @@ def _build_cycle_inputs(
         symbol_daily_trade_count_map[o.symbol] = symbol_daily_trade_count_map.get(o.symbol, 0) + 1
 
     # Compute consecutive losses: count recent losing fills where current price
-    # is below the position's avg_entry_price (not the raw fill price)
+    # is below the position's avg_entry_price (not the raw fill price).
+    # If market_prices lacks a symbol we fall back to avg_entry_price (equal,
+    # so break immediately — no loss to count without a live price).
+    # If the position is closed (pos is None) we also skip it.
     all_fills = exec_repo.list_fills_chronological()
     recent_fills = all_fills[-10:] if len(all_fills) > 10 else all_fills
     consecutive_losses = 0
@@ -344,6 +347,7 @@ def run_loop(
 
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received, stopping loop")
+        stop.set()
 
     with session_factory() as session:
         EventsRepository(session).record_event(
