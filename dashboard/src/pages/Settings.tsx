@@ -46,6 +46,7 @@ export default function Settings() {
   const [marketData, setMarketData] = useState<MarketDataStatus | null>(null);
   const [controlPlane, setControlPlane] = useState<ControlPlaneResponse | null>(null);
   const [controlPlaneFailed, setControlPlaneFailed] = useState(false);
+  const [runtimeFailed, setRuntimeFailed] = useState(false);
 
   const [modeValue, setModeValue] = useState<string>('paper_auto');
   const [allowLiveUnlock, setAllowLiveUnlock] = useState(false);
@@ -63,8 +64,8 @@ export default function Settings() {
       .then((data) => { setControlPlane(data); setControlPlaneFailed(false); })
       .catch(() => setControlPlaneFailed(true));
     getRuntimeStatus()
-      .then(setRuntime)
-      .catch(() => {});
+      .then((data) => { setRuntime(data); setRuntimeFailed(false); })
+      .catch(() => setRuntimeFailed(true));
   };
 
   useEffect(() => {
@@ -72,8 +73,8 @@ export default function Settings() {
       .then(setHealth)
       .catch(() => {});
     getRuntimeStatus()
-      .then(setRuntime)
-      .catch(() => {});
+      .then((data) => { setRuntime(data); setRuntimeFailed(false); })
+      .catch(() => setRuntimeFailed(true));
     getMarketDataStatus()
       .then(setMarketData)
       .catch(() => {});
@@ -162,15 +163,15 @@ export default function Settings() {
         </div>
         <div className="settings-row">
           <span className="row-label">Last Cycle</span>
-          <span className="row-value">{runtime?.last_cycle_status ?? '—'}</span>
+          <span className="row-value">{runtimeFailed ? '—' : (runtime?.last_cycle_status ?? '—')}</span>
         </div>
         <div className="settings-row">
           <span className="row-label">Cycles / Hour</span>
-          <span className="row-value">{runtime?.cycles_last_hour ?? '—'}</span>
+          <span className="row-value">{runtimeFailed ? '—' : (runtime?.cycles_last_hour ?? '—')}</span>
         </div>
         <div className="settings-row">
           <span className="row-label">Orders / Hour</span>
-          <span className="row-value">{runtime?.orders_last_hour ?? '—'}</span>
+          <span className="row-value">{runtimeFailed ? '—' : (runtime?.orders_last_hour ?? '—')}</span>
         </div>
       </div>
 
