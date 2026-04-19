@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 from trading.ai.scorer import AIScorer
 from trading.execution.paper_executor import PaperExecutor
 from trading.market_data.candle_service import SYMBOLS
+from trading.notifications.base import NotificationContext, NotificationLevel, Notifier
+from trading.notifications.log_notifier import LogNotifier
 from trading.portfolio.accounting import PortfolioAccount
 from trading.runtime.paper_cycle import CycleInput, CycleResult, run_paper_cycle
 from trading.storage.db import create_database_engine, create_session_factory, init_db
@@ -149,6 +151,7 @@ def run_once(
     fee_bps: Decimal = DEFAULT_FEE_BPS,
     slippage_bps: Decimal = DEFAULT_SLIPPAGE_BPS,
     min_notional: Decimal = DEFAULT_MIN_NOTIONAL,
+    notifier: Notifier | None = None,
 ) -> list[CycleResult]:
     """Run one paper trading cycle for all configured symbols.
 
@@ -160,6 +163,7 @@ def run_once(
     executor = PaperExecutor(fee_bps=fee_bps, slippage_bps=slippage_bps)
     now = datetime.now(UTC)
     results: list[CycleResult] = []
+    notify = notifier or LogNotifier()
 
     with session_factory() as session:
         events_repo = EventsRepository(session)
@@ -196,6 +200,12 @@ def run_once(
                     message=f"Unexpected error in cycle for {input_data.symbol}: {exc}",
                     context={"symbol": input_data.symbol, "error": str(exc)},
                 )
+                notify.notify(
+                    NotificationLevel.ERROR,
+                    f"Cycle error: {input_data.symbol}",
+                    str(exc),
+                    NotificationContext(symbol=input_data.symbol, error=str(exc)),
+                )
                 results.append(
                     CycleResult(
                         status="error",
@@ -230,6 +240,7 @@ def run_loop(
     fee_bps: Decimal = DEFAULT_FEE_BPS,
     slippage_bps: Decimal = DEFAULT_SLIPPAGE_BPS,
     min_notional: Decimal = DEFAULT_MIN_NOTIONAL,
+    notifier: Notifier | None = None,
 ) -> int:
     """Run paper trading cycles on a fixed interval.
 
@@ -244,6 +255,7 @@ def run_loop(
         fee_bps: fee in basis points for paper execution.
         slippage_bps: slippage in basis points for paper execution.
         min_notional: minimum order notional in USDT.
+        notifier: optional Notifier adapter for critical alerts; defaults to LogNotifier.
 
     Returns:
         The number of cycles that were executed.
@@ -253,6 +265,7 @@ def run_loop(
 
     stop = stop_event or ThreadingEvent()
     cycles_run = 0
+    notify = notifier or LogNotifier()
 
     with session_factory() as session:
         events_repo = EventsRepository(session)
@@ -306,6 +319,12 @@ def run_loop(
                         message=f"Loop cycle {cycles_run + 1} crashed: {exc}",
                         context={"cycle": cycles_run + 1, "error": str(exc)},
                     )
+                notify.notify(
+                    NotificationLevel.ERROR,
+                    "Cycle crashed",
+                    f"Cycle {cycles_run + 1} raised an unhandled exception: {exc}",
+                    NotificationContext(error=str(exc), cycle=str(cycles_run + 1)),
+                )
 
             cycles_run += 1
 
