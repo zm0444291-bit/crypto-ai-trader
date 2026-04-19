@@ -318,11 +318,13 @@ function ExecutionStatusBanner({ runtime }: { runtime: RuntimeStatus | null }) {
   let label: string;
   let labelClass: string;
 
-  if (live_trading_lock_enabled) {
+  if (live_trading_lock_enabled && (trade_mode === 'live_shadow' || trade_mode === 'live_small_auto')) {
     label = 'Live execution blocked — lock is active';
     labelClass = 'exec-banner-locked';
   } else if (trade_mode === 'paper_auto' || trade_mode === 'paper') {
-    label = 'Paper execution active';
+    label = live_trading_lock_enabled
+      ? 'Paper execution active (live lock enabled)'
+      : 'Paper execution active';
     labelClass = 'exec-banner-paper';
   } else if (trade_mode === 'dry_run') {
     label = 'Dry-run mode — no real orders';

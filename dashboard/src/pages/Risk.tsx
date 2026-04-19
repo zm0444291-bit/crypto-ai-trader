@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getRiskStatus, getRecentEvents, type RiskStatus, type EventsSummary } from '../api/client';
+import { getRiskStatus, getRecentEvents, type EventsSummary, type RiskStatus } from '../api/client';
 import { severityBadge, fmtNum, fmtTime } from '../lib';
 
 function eventReason(e: EventsSummary): string | null {
@@ -83,20 +83,20 @@ export default function Risk() {
   }, []);
 
   const fetchRejects = useCallback(() => {
-    getRecentEvents({ limit: 20 })
-      .then((r) => setRejects(r.events.filter((e) => e.event_type === 'risk_rejected')))
+    getRecentEvents({ limit: 20, event_type: 'risk_rejected' })
+      .then((r) => setRejects(r.events))
       .catch(() => setRejects(PLACEHOLDER_REJECTS));
   }, []);
 
   const fetchGateBlocks = useCallback(() => {
-    getRecentEvents({ limit: 10 })
-      .then((r) => setGateBlocks(r.events.filter((e) => e.event_type === 'execution_gate_blocked')))
+    getRecentEvents({ limit: 10, event_type: 'execution_gate_blocked' })
+      .then((r) => setGateBlocks(r.events))
       .catch(() => setGateBlocks(PLACEHOLDER_GATE));
   }, []);
 
   const fetchSupervisorErrors = useCallback(() => {
-    getRecentEvents({ limit: 10 })
-      .then((r) => setSupervisorErrors(r.events.filter((e) => e.event_type === 'supervisor_component_error')))
+    getRecentEvents({ limit: 10, event_type: 'supervisor_component_error' })
+      .then((r) => setSupervisorErrors(r.events))
       .catch(() => setSupervisorErrors(PLACEHOLDER_SUPERVISOR));
   }, []);
 
