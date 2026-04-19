@@ -323,7 +323,7 @@ def run_loop(
                     NotificationLevel.ERROR,
                     "Cycle crashed",
                     f"Cycle {cycles_run + 1} raised an unhandled exception: {exc}",
-                    NotificationContext(error=str(exc), cycle=str(cycles_run + 1)),
+                    NotificationContext(error=str(exc), cycle=cycles_run + 1),
                 )
 
             cycles_run += 1

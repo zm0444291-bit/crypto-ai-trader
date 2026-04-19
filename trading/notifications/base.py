@@ -23,6 +23,7 @@ class NotificationContext(TypedDict, total=False):
     risk_state: str
     cycles_last_hour: int
     orders_last_hour: int
+    cycle: int
 
 
 class Notifier(Protocol):

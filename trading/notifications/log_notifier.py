@@ -27,13 +27,14 @@ class LogNotifier:
         context_str = f" | context={context}" if context else ""
         full = f"[{level.value.upper()}] {title} — {message}{context_str}"
 
-        if level is NotificationLevel.INFO:
-            logger.info("%s", full)
-        elif level is NotificationLevel.WARNING:
-            logger.warning("%s", full)
-        elif level is NotificationLevel.ERROR:
-            logger.error("%s", full)
-        elif level is NotificationLevel.CRITICAL:
-            logger.critical("%s", full)
-        else:
-            logger.info("%s", full)
+        match level:
+            case NotificationLevel.INFO:
+                logger.info("%s", full)
+            case NotificationLevel.WARNING:
+                logger.warning("%s", full)
+            case NotificationLevel.ERROR:
+                logger.error("%s", full)
+            case NotificationLevel.CRITICAL:
+                logger.critical("%s", full)
+            case _:
+                logger.info("%s", full)
