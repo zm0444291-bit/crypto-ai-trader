@@ -129,14 +129,21 @@ class TestRunSupervisor:
                 errors_recorded.append(kwargs)
 
         def fake_ingest_loop(**kwargs):
-            # Normal loop - doesn't raise
-            kwargs["stop_event"].set()
+            # Wait for stop signal before exiting. The main loop will keep
+            # polling until ingest_thread.is_alive()==False, which only happens
+            # after ingest_loop returns — giving _record_component_error time
+            # to run in the trading thread before supervisor_exit.
+            kwargs["stop_event"].wait(timeout=5)
 
         def fake_run_loop(**kwargs):
             raise RuntimeError("trading loop crashed")
 
-        with patch("trading.runtime.supervisor.ingest_loop", side_effect=fake_ingest_loop):
-            with patch("trading.runtime.supervisor.run_loop", side_effect=fake_run_loop):
+        with patch(
+            "trading.runtime.supervisor.ingest_loop", side_effect=fake_ingest_loop
+        ):
+            with patch(
+                "trading.runtime.supervisor.run_loop", side_effect=fake_run_loop
+            ):
                 with patch(
                     "trading.runtime.supervisor.EventsRepository",
                     return_value=FakeEventsRepo(),
@@ -199,6 +206,106 @@ class TestRunSupervisor:
                 ingest_interval=300,
                 trade_interval=0,
             )
+
+    def test_blocks_until_threads_exit_naturally_with_max_cycles(self):
+        """With bounded max_cycles, supervisor blocks until both loops finish, then returns."""
+        call_order: list[str] = []
+
+        def fake_ingest_loop(**kwargs):
+            call_order.append("ingest_start")
+            kwargs["stop_event"].set()  # stop immediately — one cycle
+            call_order.append("ingest_stopped")
+
+        def fake_run_loop(**kwargs):
+            call_order.append("trade_start")
+            kwargs["stop_event"].set()  # stop immediately — one cycle
+            call_order.append("trade_stopped")
+
+        with patch(
+            "trading.runtime.supervisor.ingest_loop", side_effect=fake_ingest_loop
+        ):
+            with patch("trading.runtime.supervisor.run_loop", side_effect=fake_run_loop):
+                run_supervisor(
+                    session_factory=make_session_factory(),
+                    ai_scorer=FakeAIScorer(),
+                    ingest_interval=300,
+                    trade_interval=300,
+                    max_cycles=1,
+                )
+
+        # Both loops must have fully started and stopped
+        assert "ingest_start" in call_order
+        assert "ingest_stopped" in call_order
+        assert "trade_start" in call_order
+        assert "trade_stopped" in call_order
+        # Supervisor must NOT have recorded stopped until both threads were done
+        # (if it had falsely returned early, we'd only see partial call_order)
+
+    def test_stop_recorded_only_after_threads_dead(self):
+        """supervisor_stopped is never recorded while any thread is still alive."""
+        events_recorded: list[str] = []
+
+        class FakeEventsRepo:
+            def record_event(self, **kwargs):
+                events_recorded.append(kwargs["event_type"])
+
+        def fake_ingest_loop(**kwargs):
+            kwargs["stop_event"].set()
+
+        def fake_run_loop(**kwargs):
+            kwargs["stop_event"].set()
+
+        with patch(
+            "trading.runtime.supervisor.ingest_loop", side_effect=fake_ingest_loop
+        ):
+            with patch("trading.runtime.supervisor.run_loop", side_effect=fake_run_loop):
+                with patch(
+                    "trading.runtime.supervisor.EventsRepository",
+                    return_value=FakeEventsRepo(),
+                ):
+                    run_supervisor(
+                        session_factory=make_session_factory(),
+                        ai_scorer=FakeAIScorer(),
+                        ingest_interval=300,
+                        trade_interval=300,
+                        max_cycles=1,
+                    )
+
+        # supervisor_stopped must appear in events, and it must be the last event
+        assert "supervisor_stopped" in events_recorded
+        assert events_recorded[-1] == "supervisor_stopped"
+
+    def test_component_exception_sets_stop_and_waits_for_other_thread(self):
+        """When one loop crashes, stop is set and we wait for the other thread to finish."""
+        call_order: list[str] = []
+
+        def fake_ingest_loop(**kwargs):
+            call_order.append("ingest_start")
+            kwargs["stop_event"].wait(timeout=2)  # wait for stop signal
+            call_order.append("ingest_stopped")
+
+        def fake_run_loop(**kwargs):
+            call_order.append("trade_start")
+            raise RuntimeError("trading crashed")
+
+        with patch(
+            "trading.runtime.supervisor.ingest_loop", side_effect=fake_ingest_loop
+        ):
+            with patch("trading.runtime.supervisor.run_loop", side_effect=fake_run_loop):
+                with pytest.raises(RuntimeError, match="trading crashed"):
+                    run_supervisor(
+                        session_factory=make_session_factory(),
+                        ai_scorer=FakeAIScorer(),
+                        ingest_interval=300,
+                        trade_interval=300,
+                    )
+
+        # Trading must have started and crashed
+        assert "trade_start" in call_order
+        # Ingestion must have also started and received stop signal (so it could stop)
+        assert "ingest_start" in call_order
+        # Supervisor must have waited for ingestion to stop before re-raising
+        assert "ingest_stopped" in call_order
 
 
 class TestSupervisorCLI:

@@ -120,6 +120,24 @@ def run_supervisor(
             logger.exception("Trading thread raised an exception")
             _record_component_error("trading", exc)
 
+    def _record_supervisor_stopped(
+        ing_exc: Exception | None, trade_exc: Exception | None
+    ) -> None:
+        try:
+            with session_factory() as session:
+                EventsRepository(session).record_event(
+                    event_type="supervisor_stopped",
+                    severity="info",
+                    component="supervisor",
+                    message="Supervisor stopped",
+                    context={
+                        "ingestion_exc": type(ing_exc).__name__ if ing_exc else None,
+                        "trading_exc": type(trade_exc).__name__ if trade_exc else None,
+                    },
+                )
+        except Exception:
+            pass  # never let recording crash the final shutdown
+
     def _record_component_error(component: str, exc: Exception) -> None:
         try:
             with session_factory() as session:
@@ -153,14 +171,27 @@ def run_supervisor(
     ingest_thread.start()
     trade_thread.start()
 
+    # Wait for both threads to finish before recording supervisor_stopped.
+    # In resident mode (no max_cycles) this blocks indefinitely until a
+    # KeyboardInterrupt is raised or both loops exit on their own.
     try:
-        ingest_thread.join(timeout=30)
-        trade_thread.join(timeout=30)
+        while True:
+            if stop.is_set():
+                break
+            if not ingest_thread.is_alive() and not trade_thread.is_alive():
+                break
+            # Re-join with a short timeout so we can re-check stop periodically.
+            # This lets KeyboardInterrupt wake the main thread and set stop.
+            ingest_thread.join(timeout=1)
+            trade_thread.join(timeout=1)
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received, stopping supervisor")
         stop.set()
         ingest_thread.join(timeout=15)
         trade_thread.join(timeout=15)
+        _record_supervisor_stopped(ingestion_exc, trading_exc)
+        logger.info("Supervisor stopped.")
+        return
 
     if ingestion_exc is not None and trading_exc is None:
         raise ingestion_exc  # noqa: TRY201
@@ -171,16 +202,5 @@ def run_supervisor(
             f"Both loops failed — ingestion: {ingestion_exc!r}, trading: {trading_exc!r}"
         ) from ingestion_exc
 
-    with session_factory() as session:
-        EventsRepository(session).record_event(
-            event_type="supervisor_stopped",
-            severity="info",
-            component="supervisor",
-            message="Supervisor stopped",
-            context={
-                "ingestion_exc": type(ingestion_exc).__name__ if ingestion_exc else None,
-                "trading_exc": type(trading_exc).__name__ if trading_exc else None,
-            },
-        )
-
+    _record_supervisor_stopped(ingestion_exc, trading_exc)
     logger.info("Supervisor stopped.")
