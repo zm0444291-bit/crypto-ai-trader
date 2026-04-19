@@ -3,13 +3,12 @@
 from datetime import UTC
 from decimal import Decimal
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from trading.portfolio.accounting import PortfolioAccount
 from trading.runtime.config import AppSettings
 from trading.storage.db import create_database_engine, create_session_factory, init_db
-from trading.storage.models import Fill
 from trading.storage.repositories import ExecutionRecordsRepository
 
 router = APIRouter(tags=["analytics"])
@@ -49,7 +48,6 @@ def _plain_decimal(value: Decimal) -> Decimal:
 
 @router.get("/analytics/summary", response_model=AnalyticsSummaryResponse)
 def read_analytics_summary(
-    request: Request,
     initial_cash_usdt: Decimal = Decimal("500"),
 ) -> AnalyticsSummaryResponse:
     """Return analytics summary from fill history: equity trend, win/loss, daily PnL."""
@@ -81,7 +79,14 @@ def read_analytics_summary(
             daily_pnl_history=[],
         )
 
+    if initial_cash_usdt < Decimal("0"):
+        raise HTTPException(
+            status_code=400, detail="initial_cash_usdt must be greater than or equal to zero"
+        )
+
     # Build fills-by-day map and compute equity snapshots
+    from trading.storage.models import Fill
+
     fills_by_day: dict[str, list[Fill]] = {}
     for fill in all_fills:
         day_key = fill.filled_at.strftime("%Y-%m-%d")
@@ -172,7 +177,8 @@ def read_analytics_summary(
             continue
         avg_buy = sum(f.price * f.qty for f in buys) / sum(f.qty for f in buys)
         avg_sell = sum(f.price * f.qty for f in sells) / sum(f.qty for f in sells)
-        pnl = (avg_sell - avg_buy) * sum(f.qty for f in buys)
+        total_fees = sum(f.fee_usdt for f in buys) + sum(f.fee_usdt for f in sells)
+        pnl = (avg_sell - avg_buy) * sum(f.qty for f in buys) - total_fees
         if pnl > 0:
             winning_trades += 1
             total_win += pnl
