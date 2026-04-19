@@ -3,8 +3,9 @@ from typing import Any
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
+from trading.execution.paper_executor import PaperFill, PaperOrder
 from trading.market_data.schemas import CandleData
-from trading.storage.models import Candle, Event
+from trading.storage.models import Candle, Event, Fill, Order
 
 
 class EventsRepository:
@@ -99,3 +100,44 @@ class CandlesRepository:
             .limit(1)
         )
         return self.session.scalar(statement)
+
+
+class ExecutionRecordsRepository:
+    """Persistence helper for paper execution records."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def record_paper_execution(self, order: PaperOrder, fill: PaperFill) -> tuple[Order, Fill]:
+        order_record = Order(
+            mode="paper",
+            exchange="paper",
+            symbol=order.symbol,
+            side=order.side,
+            order_type=order.order_type,
+            requested_notional_usdt=order.requested_notional_usdt,
+            status=order.status,
+            created_at=order.created_at,
+        )
+        self.session.add(order_record)
+        self.session.flush()
+
+        fill_record = Fill(
+            order_id=order_record.id,
+            symbol=fill.symbol,
+            side=fill.side,
+            price=fill.price,
+            qty=fill.qty,
+            fee_usdt=fill.fee_usdt,
+            slippage_bps=fill.slippage_bps,
+            filled_at=fill.filled_at,
+        )
+        self.session.add(fill_record)
+        self.session.commit()
+        self.session.refresh(order_record)
+        self.session.refresh(fill_record)
+        return order_record, fill_record
+
+    def list_recent_orders(self, limit: int = 50) -> list[Order]:
+        statement = select(Order).order_by(desc(Order.created_at), desc(Order.id)).limit(limit)
+        return list(self.session.scalars(statement))
