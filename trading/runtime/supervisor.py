@@ -173,6 +173,12 @@ def run_supervisor(
     ingest_thread.start()
     trade_thread.start()
 
+    def _wait_for_workers_to_finish() -> None:
+        """Block until both worker threads have fully exited."""
+        while ingest_thread.is_alive() or trade_thread.is_alive():
+            ingest_thread.join(timeout=1)
+            trade_thread.join(timeout=1)
+
     # Wait for both threads to finish before recording supervisor_stopped.
     # In resident mode (no max_cycles) this blocks indefinitely until a
     # KeyboardInterrupt is raised or both loops exit on their own.
@@ -189,11 +195,14 @@ def run_supervisor(
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received, stopping supervisor")
         stop.set()
-        ingest_thread.join(timeout=15)
-        trade_thread.join(timeout=15)
+        _wait_for_workers_to_finish()
         _record_supervisor_stopped(ingestion_exc, trading_exc)
         logger.info("Supervisor stopped.")
         return
+
+    # Important: even if we break due to stop being set after a worker crash,
+    # wait until both workers are fully done before raising/recording stop.
+    _wait_for_workers_to_finish()
 
     if ingestion_exc is not None and trading_exc is None:
         raise ingestion_exc  # noqa: TRY201

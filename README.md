@@ -46,7 +46,7 @@ This creates a virtual environment (`.venv`) and installs all dependencies.
 make db-init
 ```
 
-Creates `data/crypto_trader.db` (SQLite) and runs all migrations. Safe to re-run.
+Creates `data/crypto_ai_trader.sqlite3` (SQLite) and runs all migrations. Safe to re-run.
 
 ### 3. Start services
 
@@ -152,4 +152,3 @@ If you see SQLite errors, ensure the process writing to the DB is not running mu
 Check:
 1. Market data: the cycle needs recent 15m candles in the DB. If the DB is brand new, run `make runtime-once` a few times to pull in data.
 2. AI scorer is a stub (`NoOpAIScorer`) that always allows — this is expected for paper trading.
-

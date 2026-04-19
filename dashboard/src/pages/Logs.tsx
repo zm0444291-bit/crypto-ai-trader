@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getRecentEventsFiltered, type EventsSummary } from '../api/client';
 import { fmtTime, severityBadge } from '../lib';
 
@@ -12,21 +12,30 @@ export default function Logs() {
   const [severity, setSeverity] = useState<string>('');
   const [component, setComponent] = useState<string>('');
 
-  const fetchLogs = () => {
-    const opts: Parameters<typeof getRecentEventsFiltered>[0] = { limit: 100 };
-    if (severity) opts.severity = severity;
-    if (component) opts.component = component;
+  // Keep latest filter values in a ref so the polling interval stays stable
+  const filterRef = useRef({ severity: '', component: '' });
 
+  const fetchLogs = () => {
+    const { severity: sev, component: comp } = filterRef.current;
+    const opts: Parameters<typeof getRecentEventsFiltered>[0] = { limit: 100 };
+    if (sev) opts.severity = sev;
+    if (comp) opts.component = comp;
     getRecentEventsFiltered(opts)
       .then((r) => { setEvents(r.events); setFailed(false); })
       .catch(() => { setFailed(true); setEvents([]); })
       .finally(() => setLoading(false));
   };
 
+  // Stable polling interval — does not restart when filters change
   useEffect(() => {
     fetchLogs();
     const id = setInterval(fetchLogs, 15_000);
     return () => clearInterval(id);
+  }, []);
+
+  // Keep ref in sync with filter state without restarting the polling interval
+  useEffect(() => {
+    filterRef.current = { severity, component };
   }, [severity, component]);
 
   return (
