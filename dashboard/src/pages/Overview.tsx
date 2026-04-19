@@ -318,13 +318,15 @@ function ExecutionStatusBanner({ runtime }: { runtime: RuntimeStatus | null }) {
   let label: string;
   let labelClass: string;
 
-  if (live_trading_lock_enabled && (trade_mode === 'live_shadow' || trade_mode === 'live_small_auto')) {
+  // Guard blocked — always show first, before any mode-specific text
+  if (mode_transition_guard && mode_transition_guard.startsWith('blocked:')) {
+    label = `Blocked: ${mode_transition_guard.replace('blocked: ', '')}`;
+    labelClass = 'exec-banner-blocked';
+  } else if (live_trading_lock_enabled) {
     label = 'Live execution blocked — lock is active';
     labelClass = 'exec-banner-locked';
   } else if (trade_mode === 'paper_auto' || trade_mode === 'paper') {
-    label = live_trading_lock_enabled
-      ? 'Paper execution active (live lock enabled)'
-      : 'Paper execution active';
+    label = 'Paper execution active';
     labelClass = 'exec-banner-paper';
   } else if (trade_mode === 'dry_run') {
     label = 'Dry-run mode — no real orders';
@@ -332,9 +334,6 @@ function ExecutionStatusBanner({ runtime }: { runtime: RuntimeStatus | null }) {
   } else if (trade_mode === 'live_shadow') {
     label = 'Shadow mode — live prices, no execution';
     labelClass = 'exec-banner-shadow';
-  } else if (mode_transition_guard && mode_transition_guard.startsWith('blocked:')) {
-    label = `Blocked: ${mode_transition_guard.replace('blocked: ', '')}`;
-    labelClass = 'exec-banner-blocked';
   } else if (trade_mode === 'live_small_auto') {
     label = 'Live execution active';
     labelClass = 'exec-banner-live';

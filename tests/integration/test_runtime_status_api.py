@@ -39,6 +39,10 @@ class TestRuntimeStatusEmptyDB:
         assert body["orders_last_hour"] == 0
         assert body["shadow_executions_last_hour"] == 0
         assert body["last_shadow_time"] is None
+        # Guard must be fail-closed: never "transition_allowed" in fallback or empty-DB path
+        assert body["mode_transition_guard"] != "transition_allowed"
+        assert body["mode_transition_guard"] is not None
+        assert body["mode_transition_guard"].startswith("blocked:")
 
 
 class TestRuntimeStatusWithData:
@@ -444,6 +448,9 @@ class TestControlPlaneEndpoint:
         assert body["lock_enabled"] is False
         assert body["lock_reason"] is None
         assert body["execution_route"] == "paper"
+        # Guard must be fail-closed: never "transition_allowed" in empty-DB path
+        assert body["transition_guard_to_live_small_auto"] != "transition_allowed"
+        assert body["transition_guard_to_live_small_auto"].startswith("blocked:")
 
     def test_control_plane_returns_persisted_values(self, tmp_path, monkeypatch):
         database_url = f"sqlite:///{tmp_path}/cp_persisted.sqlite3"
@@ -466,6 +473,15 @@ class TestControlPlaneEndpoint:
         assert body["lock_enabled"] is True
         assert body["lock_reason"] == "upgrade"
         assert body["execution_route"] == "shadow"
+
+    def test_control_plane_exception_fallback_is_fail_closed(self, monkeypatch):
+        """When AppSettings throws, fallback must be fail-closed (blocked: unavailable)."""
+        monkeypatch.setenv("DATABASE_URL", "/nonexistent/path/xxx.db")
+        client = TestClient(app)
+        response = client.get("/runtime/control-plane")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["transition_guard_to_live_small_auto"] == "blocked: unavailable"
 
 
 class TestRuntimeStatusShadowFields:

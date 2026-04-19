@@ -79,7 +79,7 @@ def read_runtime_status() -> RuntimeStatusResponse:
             trade_mode="paper_auto",
             live_trading_lock_enabled=False,
             execution_route_effective="paper",
-            mode_transition_guard="transition_allowed",
+            mode_transition_guard="blocked: unavailable",
             shadow_executions_last_hour=0,
             last_shadow_time=None,
         )
@@ -219,7 +219,7 @@ def read_runtime_status() -> RuntimeStatusResponse:
             trade_mode="paper_auto",
             live_trading_lock_enabled=False,
             execution_route_effective="paper",
-            mode_transition_guard="transition_allowed",
+            mode_transition_guard="blocked: unavailable",
             shadow_executions_last_hour=0,
             last_shadow_time=None,
         )
@@ -253,7 +253,7 @@ def read_control_plane() -> ControlPlaneResponse:
             lock_enabled=False,
             lock_reason=None,
             execution_route="paper",
-            transition_guard_to_live_small_auto="transition_allowed",
+            transition_guard_to_live_small_auto="blocked: unavailable",
         )
 
     try:
@@ -279,5 +279,5 @@ def read_control_plane() -> ControlPlaneResponse:
             lock_enabled=False,
             lock_reason=None,
             execution_route="paper",
-            transition_guard_to_live_small_auto="transition_allowed",
+            transition_guard_to_live_small_auto="blocked: unavailable",
         )
