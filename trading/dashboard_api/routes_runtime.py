@@ -42,6 +42,15 @@ class RuntimeStatusResponse(BaseModel):
     uptime_seconds: int | None
     last_heartbeat_time: str | None
     last_component_error: str | None
+    # Heartbeat health observability
+    heartbeat_stale_alerting: bool  # True if in stale/lost state, False otherwise
+    last_recovered_time: str | None  # ISO timestamp of last heartbeat_recovered event
+    # Component restart observability
+    restart_attempts_ingestion_last_hour: int
+    restart_attempts_trading_last_hour: int
+    restart_exhausted_ingestion: bool
+    restart_exhausted_trading: bool
+    last_restart_time: str | None
     # Execution control plane fields
     trade_mode: str
     live_trading_lock_enabled: bool
@@ -77,6 +86,13 @@ def read_runtime_status() -> RuntimeStatusResponse:
             uptime_seconds=None,
             last_heartbeat_time=None,
             last_component_error=None,
+            heartbeat_stale_alerting=False,
+            last_recovered_time=None,
+            restart_attempts_ingestion_last_hour=0,
+            restart_attempts_trading_last_hour=0,
+            restart_exhausted_ingestion=False,
+            restart_exhausted_trading=False,
+            last_restart_time=None,
             trade_mode="paper_auto",
             live_trading_lock_enabled=False,
             execution_route_effective="paper",
@@ -175,6 +191,77 @@ def read_runtime_status() -> RuntimeStatusResponse:
                     last_component_error = e.message
                     break
 
+            # ── heartbeat health observability: stale alerting and recovery ──
+            last_recovered_time: str | None = None
+            latest_heartbeat_lost_time: datetime | None = None
+            latest_heartbeat_recovered_time: datetime | None = None
+            for e in all_events:
+                if e.event_type == "heartbeat_recovered":
+                    t = _to_aware_utc(e.created_at)
+                    is_newer = (
+                        latest_heartbeat_recovered_time is None
+                        or (t is not None and t > latest_heartbeat_recovered_time)
+                    )
+                    if t and is_newer:
+                        latest_heartbeat_recovered_time = t
+                        last_recovered_time = t.isoformat() if t else None
+                elif e.event_type == "heartbeat_lost":
+                    t = _to_aware_utc(e.created_at)
+                    if t and (latest_heartbeat_lost_time is None or t > latest_heartbeat_lost_time):
+                        latest_heartbeat_lost_time = t
+            # heartbeat_stale_alerting = True when the most recent heartbeat_lost
+            # is newer than the most recent heartbeat_recovered (or no recovery yet).
+            heartbeat_stale_alerting: bool = (
+                latest_heartbeat_lost_time is not None
+                and (
+                    latest_heartbeat_recovered_time is None
+                    or latest_heartbeat_lost_time > latest_heartbeat_recovered_time
+                )
+            )
+
+            # ── component restart observability ───────────────────────────────
+            restart_attempts_ingestion_last_hour = 0
+            restart_attempts_trading_last_hour = 0
+            restart_exhausted_ingestion: bool | None = None
+            restart_exhausted_trading: bool | None = None
+            last_restart_time: str | None = None
+
+            for e in all_events:
+                if e.event_type not in (
+                    "component_restart_attempted",
+                    "component_restart_succeeded",
+                    "component_restart_exhausted",
+                ):
+                    continue
+
+                t = _to_aware_utc(e.created_at)
+                if last_restart_time is None and t is not None:
+                    last_restart_time = t.isoformat()
+
+                ctx: dict[str, Any] = e.context_json or {}
+                component = str(ctx.get("component", "")).lower()
+                if e.event_type == "component_restart_attempted":
+                    if t is not None and t >= one_hour_ago:
+                        if component == "ingestion":
+                            restart_attempts_ingestion_last_hour += 1
+                        elif component == "trading":
+                            restart_attempts_trading_last_hour += 1
+                elif e.event_type == "component_restart_exhausted":
+                    if component == "ingestion" and restart_exhausted_ingestion is None:
+                        restart_exhausted_ingestion = True
+                    elif component == "trading" and restart_exhausted_trading is None:
+                        restart_exhausted_trading = True
+                elif e.event_type == "component_restart_succeeded":
+                    if component == "ingestion" and restart_exhausted_ingestion is None:
+                        restart_exhausted_ingestion = False
+                    elif component == "trading" and restart_exhausted_trading is None:
+                        restart_exhausted_trading = False
+
+            if restart_exhausted_ingestion is None:
+                restart_exhausted_ingestion = False
+            if restart_exhausted_trading is None:
+                restart_exhausted_trading = False
+
         current_mode = get_trade_mode(session_factory)
         lock_state = get_live_trading_lock(session_factory)
         transition_guard = validate_mode_transition(
@@ -196,6 +283,13 @@ def read_runtime_status() -> RuntimeStatusResponse:
             uptime_seconds=uptime_seconds,
             last_heartbeat_time=last_heartbeat_time,
             last_component_error=last_component_error,
+            heartbeat_stale_alerting=heartbeat_stale_alerting,
+            last_recovered_time=last_recovered_time,
+            restart_attempts_ingestion_last_hour=restart_attempts_ingestion_last_hour,
+            restart_attempts_trading_last_hour=restart_attempts_trading_last_hour,
+            restart_exhausted_ingestion=restart_exhausted_ingestion,
+            restart_exhausted_trading=restart_exhausted_trading,
+            last_restart_time=last_restart_time,
             trade_mode=current_mode,
             live_trading_lock_enabled=lock_state.enabled,
             execution_route_effective=compute_execution_route(current_mode),
@@ -217,6 +311,13 @@ def read_runtime_status() -> RuntimeStatusResponse:
             uptime_seconds=None,
             last_heartbeat_time=None,
             last_component_error=None,
+            heartbeat_stale_alerting=False,
+            last_recovered_time=None,
+            restart_attempts_ingestion_last_hour=0,
+            restart_attempts_trading_last_hour=0,
+            restart_exhausted_ingestion=False,
+            restart_exhausted_trading=False,
+            last_restart_time=None,
             trade_mode="paper_auto",
             live_trading_lock_enabled=False,
             execution_route_effective="paper",
@@ -275,7 +376,7 @@ def set_mode(body: ModeChangeRequest) -> ModeChangeResponse:
         engine = create_database_engine(settings.database_url)
         init_db(engine)
         session_factory = create_session_factory(engine)
-    except Exception as exc:
+    except Exception:
         return ModeChangeResponse(
             success=False,
             current_mode="paper_auto",
@@ -332,7 +433,7 @@ def set_mode(body: ModeChangeRequest) -> ModeChangeResponse:
             current_mode=new_mode,
             guard_reason=guard.reason,
         )
-    except Exception as exc:
+    except Exception:
         return ModeChangeResponse(
             success=False,
             current_mode="paper_auto",
@@ -348,7 +449,7 @@ def set_live_lock(body: LiveLockChangeRequest) -> LiveLockChangeResponse:
         engine = create_database_engine(settings.database_url)
         init_db(engine)
         session_factory = create_session_factory(engine)
-    except Exception as exc:
+    except Exception:
         return LiveLockChangeResponse(
             success=False,
             lock_enabled=False,
@@ -381,7 +482,7 @@ def set_live_lock(body: LiveLockChangeRequest) -> LiveLockChangeResponse:
             lock_enabled=lock.enabled,
             reason=lock.reason or "ok",
         )
-    except Exception as exc:
+    except Exception:
         return LiveLockChangeResponse(
             success=False,
             lock_enabled=False,

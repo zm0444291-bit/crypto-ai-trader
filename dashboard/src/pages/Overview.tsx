@@ -58,6 +58,13 @@ const PLACEHOLDER_RUNTIME: RuntimeStatus = {
   uptime_seconds: null,
   last_heartbeat_time: null,
   last_component_error: null,
+  heartbeat_stale_alerting: false,
+  last_recovered_time: null,
+  restart_attempts_ingestion_last_hour: 0,
+  restart_attempts_trading_last_hour: 0,
+  restart_exhausted_ingestion: false,
+  restart_exhausted_trading: false,
+  last_restart_time: null,
   trade_mode: 'paper_auto',
   live_trading_lock_enabled: false,
   execution_route_effective: 'paper',
@@ -394,6 +401,18 @@ function RuntimeSection({
           </div>
         </div>
         <div className="metric-card">
+          <div className="metric-label">Heartbeat Alerting</div>
+          <div className={`metric-value ${display.heartbeat_stale_alerting ? 'negative' : (runtime ? '' : 'placeholder')}`}>
+            {display.heartbeat_stale_alerting ? 'STALE' : 'OK'}
+          </div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Heartbeat Recovered</div>
+          <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
+            {display.last_recovered_time ? fmtTime(display.last_recovered_time) : '—'}
+          </div>
+        </div>
+        <div className="metric-card">
           <div className="metric-label">Last Cycle</div>
           <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
             {display.last_cycle_status ?? '—'}
@@ -457,6 +476,24 @@ function RuntimeSection({
           <div className="metric-label">Mode Guard</div>
           <div className={`metric-value ${display.mode_transition_guard && display.mode_transition_guard.startsWith('blocked') ? 'negative' : (runtime ? '' : 'placeholder')}`}>
             {display.mode_transition_guard ?? (runtime ? '—' : '—')}
+          </div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Restart I/T (1h)</div>
+          <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
+            {display.restart_attempts_ingestion_last_hour}/{display.restart_attempts_trading_last_hour}
+          </div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Restart Exhausted</div>
+          <div className={`metric-value ${(display.restart_exhausted_ingestion || display.restart_exhausted_trading) ? 'negative' : (runtime ? '' : 'placeholder')}`}>
+            {display.restart_exhausted_ingestion || display.restart_exhausted_trading ? 'YES' : 'NO'}
+          </div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Last Restart</div>
+          <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
+            {display.last_restart_time ? fmtTime(display.last_restart_time) : '—'}
           </div>
         </div>
       </div>

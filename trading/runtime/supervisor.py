@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -45,6 +46,11 @@ HEARTBEAT_STALE_THRESHOLD_SECONDS = 120  # 2 minutes
 HEARTBEAT_RECOVERY_CONFIRM_SECONDS = 60  # 1 minute of confirmed heartbeat
 
 
+# Default restart strategy constants
+DEFAULT_MAX_RESTARTS = 3
+DEFAULT_COOLDOWN_SECONDS = 0
+
+
 def run_supervisor(
     session_factory: Callable[[], Session],
     ai_scorer: AIScorer,
@@ -55,6 +61,8 @@ def run_supervisor(
     initial_cash_usdt: Decimal = Decimal("500"),
     notifier: Notifier | None = None,
     deduplicator: AlertDeduplicator | None = None,
+    max_restarts: int = DEFAULT_MAX_RESTARTS,
+    cooldown_seconds: int = DEFAULT_COOLDOWN_SECONDS,
 ) -> None:
     """Run both the ingestion loop and the paper trading loop concurrently.
 
@@ -185,14 +193,7 @@ def run_supervisor(
     def _send_heartbeat_lost_alert(last_heartbeat_time: datetime) -> None:
         """Send a 'heartbeat lost' alert when the supervisor stops emitting heartbeats."""
         ago = (datetime.now(UTC) - last_heartbeat_time).total_seconds()
-        # Dedup applies to heartbeat_lost alerts too (avoids spam if monitor wakes frequently)
-        if not dedup.should_notify(
-            event_type="heartbeat_lost",
-            component="supervisor",
-            symbol=None,
-        ):
-            return
-        # Record the lost event to DB for audit (always, even if notification suppressed)
+        # Always record heartbeat_lost in DB for audit completeness.
         try:
             with session_factory() as session:
                 EventsRepository(session).record_event(
@@ -208,6 +209,13 @@ def run_supervisor(
                 )
         except Exception:
             pass
+        # Dedup only notification delivery (avoid spam if monitor wakes frequently).
+        if not dedup.should_notify(
+            event_type="heartbeat_lost",
+            component="supervisor",
+            symbol=None,
+        ):
+            return
         ctx: NotificationContext = {
             "event_type": "heartbeat_lost",
             "component": "supervisor",
@@ -222,17 +230,7 @@ def run_supervisor(
 
     def _send_recovered_notification() -> None:
         """Send a 'heartbeat recovered' notification after stability is confirmed."""
-        # Dedup recovered notifications to avoid spam
-        if not dedup.should_notify(
-            event_type="heartbeat_recovered",
-            component="supervisor",
-            symbol=None,
-        ):
-            return
-        ctx: NotificationContext = {
-            "event_type": "heartbeat_recovered",
-            "component": "supervisor",
-        }
+        # Always record heartbeat_recovered in DB for audit completeness.
         try:
             with session_factory() as session:
                 EventsRepository(session).record_event(
@@ -244,6 +242,17 @@ def run_supervisor(
                 )
         except Exception:
             pass
+        # Dedup recovered notifications to avoid alert spam.
+        if not dedup.should_notify(
+            event_type="heartbeat_recovered",
+            component="supervisor",
+            symbol=None,
+        ):
+            return
+        ctx: NotificationContext = {
+            "event_type": "heartbeat_recovered",
+            "component": "supervisor",
+        }
         notify.notify(
             NotificationLevel.INFO,
             "Heartbeat recovered",
@@ -279,40 +288,213 @@ def run_supervisor(
     ingestion_exc: Exception | None = None
     trading_exc: Exception | None = None
 
+    # ── Per-component restart state ────────────────────────────────────────────
+    # These are shared mutable containers protected by the Python GIL.
+    # Only ingestion_target and trading_target write to their own keys.
+    # The supervisor main loop only reads them on the way out.
+    _restart_state: dict[str, dict[str, object]] = {
+        "ingestion": {
+            "restart_count": 0,     # number of restart attempts made
+            "last_attempt": None,   # datetime of last restart attempt
+            "exhausted": False,
+            "had_crash": False,     # True if current iteration follows a crash
+        },
+        "trading": {
+            "restart_count": 0,
+            "last_attempt": None,
+            "exhausted": False,
+            "had_crash": False,
+        },
+    }
+
+    def _record_restart_event(
+        event_type: str,
+        component: str,
+        attempt: int,
+        reason: str,
+        cooldown_active: bool = False,
+    ) -> None:
+        """Record a restart-related event to the DB."""
+        try:
+            with session_factory() as session:
+                EventsRepository(session).record_event(
+                    event_type=event_type,
+                    severity="warning" if event_type == "component_restart_exhausted" else "info",
+                    component="supervisor",
+                    message=f"Component {component} {event_type.replace('_', ' ')}",
+                    context={
+                        "component": component,
+                        "attempt": attempt,
+                        "reason": reason,
+                        "cooldown_active": cooldown_active,
+                        "timestamp_utc": datetime.now(UTC).isoformat(),
+                    },
+                )
+        except Exception:
+            pass  # never let event recording crash the supervisor
+
+    def _can_restart(component: str) -> tuple[bool, str]:
+        """Check if a component can be restarted.
+
+        Returns:
+            (can_restart, message)
+        """
+        state = _restart_state[component]
+        if state["exhausted"]:
+            return False, "component is exhausted"
+
+        count = state["restart_count"]
+        if count >= max_restarts:
+            return False, f"max restarts ({max_restarts}) exceeded"
+
+        return True, "ok"
+
     def _ingestion_target() -> None:
         nonlocal ingestion_exc
-        try:
-            ingest_loop(
-                interval_seconds=ingest_interval,
-                session_factory=session_factory,
-                symbols=symbols,
-                max_cycles=max_cycles,
-                stop_event=stop,
-            )
-        except Exception as exc:
-            ingestion_exc = exc
-            logger.exception("Ingestion thread raised an exception")
-            stop.set()  # signal the other loop to shut down
-            _record_component_error("ingestion", exc)
+        component = "ingestion"
+        first_iteration = True
+        while first_iteration or _restart_state[component]["had_crash"] or not stop.is_set():
+            first_iteration = False
+            state = _restart_state[component]
+            # Track whether this iteration follows a crash (for success event)
+            is_retry = state["had_crash"]
+            # Reset per-attempt state
+            state["had_crash"] = False
+
+            try:
+                ingest_loop(
+                    interval_seconds=ingest_interval,
+                    session_factory=session_factory,
+                    symbols=symbols,
+                    max_cycles=max_cycles,
+                    stop_event=stop,
+                )
+                # Normal exit — loop completed successfully (e.g., max_cycles reached)
+                if is_retry:
+                    # This was a restart that succeeded
+                    _record_restart_event(
+                        "component_restart_succeeded",
+                        component,
+                        state["restart_count"],
+                        "restart succeeded",
+                    )
+                    state["restart_count"] = 0  # reset after success
+                break
+            except Exception as exc:
+                logger.exception("Ingestion thread raised an exception")
+                can_restart, _reason = _can_restart(component)
+
+                if can_restart:
+                    state["restart_count"] += 1
+                    state["last_attempt"] = datetime.now(UTC)
+                    state["had_crash"] = True
+                    _record_restart_event(
+                        "component_restart_attempted",
+                        component,
+                        state["restart_count"],
+                        str(exc),
+                    )
+                    # Cooldown before next attempt. Emit an additional attempted event
+                    # that marks cooldown-active so runtime can explain delays.
+                    if cooldown_seconds > 0:
+                        _record_restart_event(
+                            "component_restart_attempted",
+                            component,
+                            state["restart_count"] + 1,
+                            "cooldown before restart",
+                            cooldown_active=True,
+                        )
+                        time.sleep(cooldown_seconds)
+                    continue  # retry
+                else:
+                    # Cannot restart — exhausted
+                    if state["restart_count"] >= max_restarts and not state["exhausted"]:
+                        state["exhausted"] = True
+                        _record_restart_event(
+                            "component_restart_exhausted",
+                            component,
+                            state["restart_count"],
+                            str(exc),
+                        )
+                    ingestion_exc = exc
+                    stop.set()  # signal the other loop to shut down
+                    _record_component_error(component, exc)
+                    break
 
     def _trading_target() -> None:
         nonlocal trading_exc
-        try:
-            run_loop(
-                interval_seconds=trade_interval,
-                session_factory=session_factory,
-                ai_scorer=ai_scorer,
-                symbols=symbols,
-                initial_cash_usdt=initial_cash_usdt,
-                max_cycles=max_cycles,
-                stop_event=stop,
-                notifier=notify,
-            )
-        except Exception as exc:
-            trading_exc = exc
-            logger.exception("Trading thread raised an exception")
-            stop.set()  # signal the other loop to shut down
-            _record_component_error("trading", exc)
+        component = "trading"
+        first_iteration = True
+        while first_iteration or _restart_state[component]["had_crash"] or not stop.is_set():
+            first_iteration = False
+            state = _restart_state[component]
+            # Track whether this iteration follows a crash (for success event)
+            is_retry = state["had_crash"]
+            # Reset per-attempt state
+            state["had_crash"] = False
+
+            try:
+                run_loop(
+                    interval_seconds=trade_interval,
+                    session_factory=session_factory,
+                    ai_scorer=ai_scorer,
+                    symbols=symbols,
+                    initial_cash_usdt=initial_cash_usdt,
+                    max_cycles=max_cycles,
+                    stop_event=stop,
+                    notifier=notify,
+                )
+                # Normal exit — loop completed successfully
+                if is_retry:
+                    # This was a restart that succeeded
+                    _record_restart_event(
+                        "component_restart_succeeded",
+                        component,
+                        state["restart_count"],
+                        "restart succeeded",
+                    )
+                    state["restart_count"] = 0  # reset after success
+                break
+            except Exception as exc:
+                logger.exception("Trading thread raised an exception")
+                can_restart, _reason = _can_restart(component)
+
+                if can_restart:
+                    state["restart_count"] += 1
+                    state["last_attempt"] = datetime.now(UTC)
+                    state["had_crash"] = True
+                    _record_restart_event(
+                        "component_restart_attempted",
+                        component,
+                        state["restart_count"],
+                        str(exc),
+                    )
+                    # Cooldown before next attempt. Emit an additional attempted event
+                    # that marks cooldown-active so runtime can explain delays.
+                    if cooldown_seconds > 0:
+                        _record_restart_event(
+                            "component_restart_attempted",
+                            component,
+                            state["restart_count"] + 1,
+                            "cooldown before restart",
+                            cooldown_active=True,
+                        )
+                        time.sleep(cooldown_seconds)
+                    continue  # retry
+                else:
+                    # Cannot restart — exhausted
+                    if state["restart_count"] >= max_restarts and not state["exhausted"]:
+                        state["exhausted"] = True
+                        _record_restart_event(
+                            "component_restart_exhausted",
+                            component,
+                            state["restart_count"],
+                            str(exc),
+                        )
+                    trading_exc = exc
+                    stop.set()  # signal the other loop to shut down
+                    _record_component_error(component, exc)
+                    break
 
     def _record_supervisor_stopped(
         ing_exc: Exception | None, trade_exc: Exception | None

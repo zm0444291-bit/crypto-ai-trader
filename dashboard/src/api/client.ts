@@ -71,6 +71,13 @@ export interface RuntimeStatus {
   uptime_seconds: number | null;
   last_heartbeat_time: string | null;
   last_component_error: string | null;
+  heartbeat_stale_alerting: boolean;
+  last_recovered_time: string | null;
+  restart_attempts_ingestion_last_hour: number;
+  restart_attempts_trading_last_hour: number;
+  restart_exhausted_ingestion: boolean;
+  restart_exhausted_trading: boolean;
+  last_restart_time: string | null;
   trade_mode: string;
   live_trading_lock_enabled: boolean;
   execution_route_effective: string;

@@ -45,6 +45,24 @@ class TestRuntimeStatusEmptyDB:
         assert body["mode_transition_guard"].startswith("blocked:")
 
 
+class TestRuntimeStatusFailClosed:
+    """API should fail-closed (never 500) when DB is unavailable."""
+
+    def test_status_exception_fallback_is_fail_closed(self, monkeypatch):
+        """When AppSettings or DB access throws, endpoint returns safe fail-closed values."""
+        monkeypatch.setenv("DATABASE_URL", "/nonexistent/path/xxx.db")
+        client = TestClient(app)
+        response = client.get("/runtime/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["trade_mode"] == "paper_auto"
+        assert body["live_trading_lock_enabled"] is False
+        assert body["execution_route_effective"] == "paper"
+        assert body["mode_transition_guard"] == "blocked: unavailable"
+        assert body["shadow_executions_last_hour"] == 0
+
+
 class TestRuntimeStatusWithData:
     """DB with events and orders should produce correct counters and latest status."""
 
@@ -231,6 +249,11 @@ class TestRuntimeStatusHeartbeatFields:
         assert body["uptime_seconds"] is None
         assert body["last_heartbeat_time"] is None
         assert body["last_component_error"] is None
+        assert body["restart_attempts_ingestion_last_hour"] == 0
+        assert body["restart_attempts_trading_last_hour"] == 0
+        assert body["restart_exhausted_ingestion"] is False
+        assert body["restart_exhausted_trading"] is False
+        assert body["last_restart_time"] is None
 
     def test_heartbeat_produces_supervisor_alive_true(self, tmp_path, monkeypatch):
         database_url = f"sqlite:///{tmp_path}/heartbeat.sqlite3"
@@ -355,6 +378,52 @@ class TestRuntimeStatusWithControlPlane:
         body = response.json()
         assert body["trade_mode"] == "live_shadow"
         assert body["execution_route_effective"] == "shadow"
+
+
+class TestRuntimeStatusRestartObservability:
+    """Restart-related observability fields are populated from supervisor events."""
+
+    def test_restart_fields_populated_from_events(self, tmp_path, monkeypatch):
+        database_url = f"sqlite:///{tmp_path}/restart_obs.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        with session_factory() as session:
+            events_repo = EventsRepository(session)
+            events_repo.record_event(
+                event_type="component_restart_attempted",
+                severity="info",
+                component="supervisor",
+                message="restart ingestion",
+                context={"component": "ingestion", "attempt": 1, "reason": "boom"},
+            )
+            events_repo.record_event(
+                event_type="component_restart_attempted",
+                severity="info",
+                component="supervisor",
+                message="restart trading",
+                context={"component": "trading", "attempt": 1, "reason": "boom"},
+            )
+            events_repo.record_event(
+                event_type="component_restart_exhausted",
+                severity="warning",
+                component="supervisor",
+                message="ingestion exhausted",
+                context={"component": "ingestion", "attempt": 3, "reason": "max restarts"},
+            )
+
+        client = TestClient(app)
+        response = client.get("/runtime/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["restart_attempts_ingestion_last_hour"] >= 1
+        assert body["restart_attempts_trading_last_hour"] >= 1
+        assert body["restart_exhausted_ingestion"] is True
+        assert body["restart_exhausted_trading"] is False
+        assert body["last_restart_time"] is not None
 
     def test_status_returns_persisted_lock_enabled(self, tmp_path, monkeypatch):
         database_url = f"sqlite:///{tmp_path}/control_lock.sqlite3"
@@ -672,6 +741,23 @@ class TestControlPlaneWriteMode:
         assert body["guard_reason"] == "blocked: unavailable"
         assert body["current_mode"] == "paper_auto"
 
+    def test_mode_change_exception_fallback_is_fail_closed(self, monkeypatch):
+        """When session factory raises, mode change returns fail-closed (not 500)."""
+        # Use a path that exists but with a locked file that causes session error
+        monkeypatch.setenv("DATABASE_URL", "/tmp/fake_readonly_db.db")
+        client = TestClient(app)
+
+        response = client.post(
+            "/runtime/control-plane/mode",
+            json={"to_mode": "live_shadow"},
+        )
+
+        # Must not return 500; must be fail-closed
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert "blocked" in body["guard_reason"]
+
 
 class TestControlPlaneWriteLiveLock:
     """POST /runtime/control-plane/live-lock — safe, audited lock changes."""
@@ -813,4 +899,3 @@ class TestControlPlaneWriteConsistency:
         # Check /runtime/control-plane
         cp_resp = client.get("/runtime/control-plane")
         assert cp_resp.json()["lock_enabled"] is True
-
