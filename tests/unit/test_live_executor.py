@@ -315,3 +315,155 @@ class TestEnsureExchangeInfo:
             executor.ensure_exchange_info()
             # Only called once because _exchange_info_fetched is True after first call
             mock_fetch.assert_called_once()
+
+
+class TestColdFilterAutoEnsure:
+    """Tests for auto-ensure behavior when filters are not pre-warmed."""
+
+    def test_place_market_buy_auto_ensures_on_cold_filters(self, enabled_config):
+        """place_market_buy calls ensure_exchange_info before applying filters on cold start."""
+        executor = LiveExecutor(enabled_config, api_key="test", api_secret="test")
+
+        with patch.object(executor, "ensure_exchange_info") as mock_ensure:
+            filtered = (Decimal("0.1"), Decimal("100000"))
+            with patch.object(executor, "_apply_filters", return_value=filtered):
+                with patch.object(executor, "_request") as mock_request:
+                    mock_request.return_value = {"orderId": "12345", "clientOrderId": "test-id"}
+                    result = executor.place_market_buy(
+                        symbol="BTCUSDT",
+                        qty=Decimal("0.1"),
+                        price=Decimal("100000"),
+                        strategy_name="strategy",
+                        cycle_id="cycle1",
+                    )
+
+            assert mock_ensure.call_count == 1
+            assert result.success is True
+
+    def test_place_market_sell_auto_ensures_on_cold_filters(self, enabled_config):
+        """place_market_sell calls ensure_exchange_info before applying filters on cold start."""
+        executor = LiveExecutor(enabled_config, api_key="test", api_secret="test")
+
+        with patch.object(executor, "ensure_exchange_info") as mock_ensure:
+            filtered = (Decimal("0.1"), Decimal("100000"))
+            with patch.object(executor, "_apply_filters", return_value=filtered):
+                with patch.object(executor, "_request") as mock_request:
+                    mock_request.return_value = {"orderId": "67890", "clientOrderId": "sell-id"}
+                    result = executor.place_market_sell(
+                        symbol="BTCUSDT",
+                        qty=Decimal("0.1"),
+                        price=Decimal("100000"),
+                        strategy_name="strategy",
+                        cycle_id="cycle1",
+                    )
+
+            assert mock_ensure.call_count == 1
+            assert result.success is True
+
+    def test_cold_filters_ensure_succeeds_but_filter_validation_fails(self, enabled_config):
+        """When ensure succeeds but filters were never cached, filter_validation_failed returned."""
+        executor = LiveExecutor(enabled_config, api_key="test", api_secret="test")
+        # No filters pre-warmed; ensure_exchange_info is a no-op since filters were never cached
+
+        with patch.object(executor, "ensure_exchange_info"):  # succeeds (no-op)
+            result = executor.place_market_buy(
+                symbol="BTCUSDT",
+                qty=Decimal("0.1"),
+                price=Decimal("100000"),
+                strategy_name="strategy",
+                cycle_id="cycle1",
+            )
+
+        # Without pre-warmed filters, format_quantity returns None -> filter_validation_failed
+        assert result.success is False
+        assert result.error_message == "filter_validation_failed"
+
+    def test_warm_filters_skip_ensure_and_proceed_directly(
+        self, enabled_config, mock_binance_filters
+    ):
+        """When filters are pre-warmed, fetch_and_cache is not called."""
+        executor = LiveExecutor(
+            enabled_config, api_key="test", api_secret="test", filters=mock_binance_filters
+        )
+        # Simulate already-warmed state
+        executor._exchange_info_fetched = True
+
+        with patch.object(executor.filters, "fetch_and_cache") as mock_fetch:
+            with patch.object(executor, "_request") as mock_request:
+                mock_request.return_value = {"orderId": "12345", "clientOrderId": "test-id"}
+                result = executor.place_market_buy(
+                    symbol="BTCUSDT",
+                    qty=Decimal("0.1"),
+                    price=Decimal("100000"),
+                    strategy_name="strategy",
+                    cycle_id="cycle1",
+                )
+
+            # fetch_and_cache should not be called when already warm
+            mock_fetch.assert_not_called()
+            assert result.success is True
+
+    def test_ensure_failure_returns_exchange_info_unavailable_no_exception_propagates(
+        self, enabled_config
+    ):
+        """When ensure raises httpx error, no exception escapes — stable error returned."""
+        executor = LiveExecutor(enabled_config, api_key="test", api_secret="test")
+
+        # Use the exact exception types that the code catches
+        with patch.object(
+            executor, "ensure_exchange_info",
+            side_effect=httpx.RequestError("network unreachable", request=MagicMock())
+        ):
+            result = executor.place_market_buy(
+                symbol="BTCUSDT",
+                qty=Decimal("0.1"),
+                price=Decimal("100000"),
+                strategy_name="strategy",
+                cycle_id="cycle1",
+            )
+
+        # Stable machine-readable error, no exception propagates
+        assert result.success is False
+        assert "exchange_info_unavailable" in result.error_message
+
+    def test_ensure_http_error_returns_stable_error(self, enabled_config, mock_binance_filters):
+        """When ensure_exchange_info raises HTTPStatusError, stable error returned."""
+        executor = LiveExecutor(
+            enabled_config, api_key="test", api_secret="test", filters=mock_binance_filters
+        )
+
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        exc = httpx.HTTPStatusError("rate limited", request=MagicMock(), response=mock_response)
+        with patch.object(executor, "ensure_exchange_info", side_effect=exc):
+            result = executor.place_market_buy(
+                symbol="BTCUSDT",
+                qty=Decimal("0.1"),
+                price=Decimal("100000"),
+                strategy_name="strategy",
+                cycle_id="cycle1",
+            )
+
+        assert result.success is False
+        assert result.error_message == "exchange_info_unavailable:HTTPStatusError"
+
+    def test_unexpected_exception_returns_internal_error(
+        self, enabled_config, mock_binance_filters
+    ):
+        """Unexpected non-httpx exceptions should return internal_error (not request_error)."""
+        executor = LiveExecutor(
+            enabled_config, api_key="test", api_secret="test", filters=mock_binance_filters
+        )
+        executor._exchange_info_fetched = True
+
+        with patch.object(executor, "_request", side_effect=RuntimeError("boom")):
+            result = executor.place_market_buy(
+                symbol="BTCUSDT",
+                qty=Decimal("0.1"),
+                price=Decimal("100000"),
+                strategy_name="strategy",
+                cycle_id="cycle1",
+            )
+
+        assert result.success is False
+        assert result.error_message == "internal_error"

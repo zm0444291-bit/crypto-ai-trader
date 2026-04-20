@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -19,6 +20,8 @@ from decimal import Decimal
 import httpx
 
 from trading.execution.binance_filters import BinanceFilters
+
+logger = logging.getLogger(__name__)
 
 # Default timeout for Binance API requests: (connect, read) in seconds
 _DEFAULT_TIMEOUT: tuple[float, float] = (5.0, 10.0)
@@ -276,6 +279,26 @@ class LiveExecutor:
                 filled_price=None,
                 error_message=f"request_error:{type(e).__name__}",
             )
+        except Exception:
+            logger.exception(
+                "Unexpected exception while placing live market order",
+                extra={
+                    "symbol": symbol,
+                    "side": side,
+                    "strategy_name": strategy_name,
+                    "cycle_id": cycle_id,
+                },
+            )
+            return OrderResult(
+                success=False,
+                order_id=None,
+                client_order_id=client_order_id,
+                symbol=symbol,
+                side=side,
+                filled_qty=None,
+                filled_price=None,
+                error_message="internal_error",
+            )
 
     def place_market_buy(
         self,
@@ -349,5 +372,5 @@ class LiveExecutor:
                 "recvWindow": _RECV_WINDOW_MS,
             }
             return self._request("GET", "/api/v3/order", params)
-        except Exception:
+        except (httpx.HTTPStatusError, httpx.RequestError):
             return None
