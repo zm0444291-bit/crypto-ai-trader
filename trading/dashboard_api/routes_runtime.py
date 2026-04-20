@@ -1,14 +1,27 @@
 """Dashboard API for runtime loop visibility and control (read-only + write control-plane)."""
 
+import os
+import signal
+import subprocess
+import threading
+import time
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from trading.execution.gate import TRADE_MODES, compute_execution_route
 from trading.runtime.config import AppSettings
 from trading.runtime.mode import validate_mode_transition
+from trading.runtime.reconciliation import (
+    BalanceSnapshot,
+    PositionSnapshot,
+    ReconciliationStatus,
+    ReconciliationThresholds,
+    run_reconciliation,
+)
 from trading.runtime.state import get_live_trading_lock, get_trade_mode
 from trading.storage.db import create_database_engine, create_session_factory, init_db
 from trading.storage.repositories import (
@@ -27,6 +40,12 @@ def _to_aware_utc(ts: datetime | None) -> datetime | None:
     if ts.tzinfo is None:
         return ts.replace(tzinfo=UTC)
     return ts.astimezone(UTC)
+
+
+class ReconciliationStatusResponse(BaseModel):
+    status: ReconciliationStatus
+    last_check_time: str | None
+    diff_summary: str
 
 
 class RuntimeStatusResponse(BaseModel):
@@ -59,6 +78,8 @@ class RuntimeStatusResponse(BaseModel):
     # Shadow execution fields (live_shadow mode)
     shadow_executions_last_hour: int
     last_shadow_time: str | None
+    # Reconciliation status
+    reconciliation: ReconciliationStatusResponse
 
 
 @router.get("/runtime/status", response_model=RuntimeStatusResponse)
@@ -99,6 +120,11 @@ def read_runtime_status() -> RuntimeStatusResponse:
             mode_transition_guard="blocked: unavailable",
             shadow_executions_last_hour=0,
             last_shadow_time=None,
+            reconciliation=ReconciliationStatusResponse(
+                status=ReconciliationStatus.OK,
+                last_check_time=None,
+                diff_summary="unavailable",
+            ),
         )
 
     now = datetime.now(UTC)
@@ -144,6 +170,56 @@ def read_runtime_status() -> RuntimeStatusResponse:
                 for o in recent_orders
                 if (_to_aware_utc(o.created_at) or datetime.min.replace(tzinfo=UTC))
                 >= one_hour_ago
+            )
+
+            # ── reconciliation ───────────────────────────────────────────────────
+            # Build local balance/position snapshots from DB fills for reconciliation.
+            # This runs on every /runtime/status call to keep the dashboard fresh.
+            all_fills = exec_repo.list_fills_chronological()
+            local_usdt_balance = Decimal("500")  # initial cash
+            local_positions: dict[str, PositionSnapshot] = {}
+
+            for fill in all_fills:
+                if fill.side == "BUY":
+                    local_usdt_balance -= fill.qty * fill.price + fill.fee_usdt
+                    pos = local_positions.get(fill.symbol)
+                    if pos is None:
+                        local_positions[fill.symbol] = PositionSnapshot(
+                            symbol=fill.symbol,
+                            qty=fill.qty,
+                            avg_entry_price=fill.price,
+                        )
+                    else:
+                        total_qty = pos.qty + fill.qty
+                        total_cost = pos.qty * pos.avg_entry_price + fill.qty * fill.price
+                        local_positions[fill.symbol] = PositionSnapshot(
+                            symbol=fill.symbol,
+                            qty=total_qty,
+                            avg_entry_price=total_cost / total_qty,
+                        )
+                elif fill.side == "SELL":
+                    local_usdt_balance += fill.qty * fill.price - fill.fee_usdt
+                    pos = local_positions.get(fill.symbol)
+                    if pos is not None:
+                        new_qty = pos.qty - fill.qty
+                        if new_qty <= Decimal("0"):
+                            del local_positions[fill.symbol]
+                        else:
+                            local_positions[fill.symbol] = PositionSnapshot(
+                                symbol=fill.symbol,
+                                qty=new_qty,
+                                avg_entry_price=pos.avg_entry_price,
+                            )
+
+            local_balance_snapshots = [
+                BalanceSnapshot(asset="USDT", free=local_usdt_balance, locked=Decimal("0"))
+            ]
+            local_position_snapshots = list(local_positions.values())
+
+            reconciliation_result = run_reconciliation(
+                local_balances=local_balance_snapshots,
+                local_positions=local_position_snapshots,
+                thresholds=ReconciliationThresholds(),
             )
 
             # ── shadow execution fields ──────────────────────────────────────────
@@ -296,6 +372,15 @@ def read_runtime_status() -> RuntimeStatusResponse:
             mode_transition_guard=transition_guard.reason,
             shadow_executions_last_hour=shadow_executions_last_hour,
             last_shadow_time=last_shadow_time,
+            reconciliation=ReconciliationStatusResponse(
+                status=reconciliation_result.status,
+                last_check_time=datetime.now(UTC).isoformat(),
+                diff_summary=(
+                    f"balance_diff={reconciliation_result.balance_diff_usdt} USDT, "
+                    f"position_diffs={reconciliation_result.position_diff_count}, "
+                    f"global_pause={reconciliation_result.global_pause_recommended}"
+                ),
+            ),
         )
 
     except Exception:
@@ -324,6 +409,11 @@ def read_runtime_status() -> RuntimeStatusResponse:
             mode_transition_guard="blocked: unavailable",
             shadow_executions_last_hour=0,
             last_shadow_time=None,
+            reconciliation=ReconciliationStatusResponse(
+                status=ReconciliationStatus.OK,
+                last_check_time=None,
+                diff_summary="unavailable",
+            ),
         )
 
 
@@ -366,6 +456,54 @@ class ControlPlaneResponse(BaseModel):
     lock_reason: str | None
     execution_route: str
     transition_guard_to_live_small_auto: str
+
+
+class SystemExitRequest(BaseModel):
+    """Request body for local one-click system exit."""
+
+    confirm: bool = True
+
+
+class SystemExitResponse(BaseModel):
+    """Response for local one-click system exit."""
+
+    success: bool
+    message: str
+
+
+def _perform_local_shutdown(current_pid: int) -> None:
+    """Terminate local runtime/backend/dashboard processes for one-click exit."""
+    patterns = (
+        "trading.runtime.cli --supervisor",
+        "trading.runtime.cli --interval",
+        "trading.runtime.cli --once",
+        "uvicorn trading.main:app",
+        "npm run dev",
+        "vite",
+    )
+    for pattern in patterns:
+        subprocess.run(
+            ["pkill", "-f", pattern],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    try:
+        os.kill(current_pid, signal.SIGTERM)
+    except OSError:
+        pass
+
+
+def schedule_local_shutdown(delay_seconds: float = 0.8) -> None:
+    """Schedule local shutdown after the API response has been sent."""
+    current_pid = os.getpid()
+
+    def _worker() -> None:
+        time.sleep(delay_seconds)
+        _perform_local_shutdown(current_pid)
+
+    thread = threading.Thread(target=_worker, daemon=True, name="local-system-exit")
+    thread.start()
 
 
 @router.post("/runtime/control-plane/mode", response_model=ModeChangeResponse)
@@ -536,3 +674,21 @@ def read_control_plane() -> ControlPlaneResponse:
             execution_route="paper",
             transition_guard_to_live_small_auto="blocked: unavailable",
         )
+
+
+@router.post("/runtime/system/exit", response_model=SystemExitResponse)
+def exit_local_system(body: SystemExitRequest, request: Request) -> SystemExitResponse:
+    """One-click local exit from Dashboard.
+
+    This is local-ops only: it schedules shutdown of runtime/backend/dashboard
+    processes and then terminates the current backend process.
+    """
+    if not body.confirm:
+        return SystemExitResponse(success=False, message="blocked: confirmation_required")
+
+    client_host = request.client.host if request.client else ""
+    if client_host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
+        return SystemExitResponse(success=False, message="blocked: local_only")
+
+    schedule_local_shutdown()
+    return SystemExitResponse(success=True, message="shutdown_scheduled")

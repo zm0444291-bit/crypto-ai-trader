@@ -164,6 +164,60 @@ class TestRunOnce:
 
         assert symbols_called == ["BTCUSDT", "ETHUSDT"]
 
+    def test_run_once_passes_exit_engine_into_cycle(self):
+        """run_once wires ExitEngine into run_paper_cycle calls."""
+        session_factory = make_session_factory()
+
+        from trading.runtime.paper_cycle import CycleInput
+
+        fake_inputs = [
+            CycleInput(
+                symbol="BTCUSDT",
+                now=datetime.now(UTC),
+                day_start_equity=Decimal("500"),
+                account_equity=Decimal("500"),
+                market_prices={"BTCUSDT": Decimal("50000")},
+                total_position_pct=Decimal("0"),
+                symbol_position_pct=Decimal("0"),
+                open_positions=0,
+                daily_order_count=0,
+                symbol_daily_trade_count=0,
+                consecutive_losses=0,
+                data_is_fresh=True,
+                kill_switch_enabled=False,
+            )
+        ]
+
+        captured_exit_engines: list[object] = []
+
+        def fake_cycle(*args, **kwargs):
+            captured_exit_engines.append(kwargs.get("exit_engine"))
+            from trading.runtime.paper_cycle import CycleResult
+
+            return CycleResult(
+                symbol="BTCUSDT",
+                status="no_signal",
+                candidate_present=False,
+                ai_decision=None,
+                risk_state=None,
+                order_executed=False,
+                reject_reasons=[],
+                event_ids=[],
+            )
+
+        with patch("trading.runtime.runner.run_paper_cycle", side_effect=fake_cycle):
+            with patch("trading.runtime.runner._build_cycle_inputs", return_value=fake_inputs):
+                with patch("trading.runtime.runner.EventsRepository"):
+                    run_once(
+                        session_factory=session_factory,
+                        ai_scorer=FakeAIScorer(),
+                        symbols=["BTCUSDT"],
+                        initial_cash_usdt=Decimal("500"),
+                    )
+
+        assert len(captured_exit_engines) == 1
+        assert captured_exit_engines[0] is not None
+
 
 class TestRunLoop:
     """run_loop looping and event recording behaviour."""
@@ -580,3 +634,59 @@ class TestDataFreshness:
 
         assert len(inputs) == 1
         assert inputs[0].data_is_fresh is False
+
+    def test_build_cycle_inputs_rebuilds_positions_with_sell_fills(self):
+        """SELL fills are applied during reconstruction; fully-closed positions are absent."""
+        from datetime import UTC, datetime
+        from decimal import Decimal
+        from unittest.mock import MagicMock, patch
+
+        from trading.runtime.runner import _build_cycle_inputs
+
+        candle_mock = MagicMock()
+        candle_mock.open_time = datetime.now(UTC)
+        candle_mock.close = Decimal("50000")
+        candles_repo = MagicMock()
+        candles_repo.get_latest.return_value = candle_mock
+
+        buy_fill = MagicMock()
+        buy_fill.symbol = "BTCUSDT"
+        buy_fill.side = "BUY"
+        buy_fill.price = Decimal("100")
+        buy_fill.qty = Decimal("1")
+        buy_fill.fee_usdt = Decimal("0.1")
+        buy_fill.slippage_bps = Decimal("0")
+        buy_fill.filled_at = datetime.now(UTC)
+
+        sell_fill = MagicMock()
+        sell_fill.symbol = "BTCUSDT"
+        sell_fill.side = "SELL"
+        sell_fill.price = Decimal("110")
+        sell_fill.qty = Decimal("1")
+        sell_fill.fee_usdt = Decimal("0.1")
+        sell_fill.slippage_bps = Decimal("0")
+        sell_fill.filled_at = datetime.now(UTC)
+
+        exec_repo = MagicMock()
+        exec_repo.list_fills_chronological.return_value = [buy_fill, sell_fill]
+        exec_repo.list_recent_orders.return_value = []
+
+        fake_events_repo = MagicMock()
+        fake_events_repo.get_latest_event_by_type.return_value = None
+
+        with patch("trading.runtime.runner.CandlesRepository", return_value=candles_repo):
+            with patch("trading.runtime.runner.ExecutionRecordsRepository", return_value=exec_repo):
+                with patch(
+                    "trading.runtime.runner.EventsRepository",
+                    return_value=fake_events_repo,
+                ):
+                    inputs = _build_cycle_inputs(
+                        session=MagicMock(),
+                        symbols=["BTCUSDT"],
+                        now=datetime.now(UTC),
+                        initial_cash_usdt=Decimal("500"),
+                    )
+
+        assert len(inputs) == 1
+        assert inputs[0].open_positions == 0
+        assert inputs[0].current_position is None

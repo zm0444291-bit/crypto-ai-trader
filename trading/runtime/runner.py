@@ -24,6 +24,7 @@ from trading.storage.repositories import (
     EventsRepository,
     ExecutionRecordsRepository,
 )
+from trading.strategies.exits import ExitEngine
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,8 @@ def _build_cycle_inputs(
         )
         if fill.side == "BUY":
             account.apply_buy_fill(pf)
+        elif fill.side == "SELL":
+            account.apply_sell_fill(pf)
 
     # Build market prices from latest candles
     market_prices: dict[str, Decimal] = {}
@@ -188,6 +191,7 @@ def _build_cycle_inputs(
                 consecutive_losses=consecutive_losses,
                 data_is_fresh=data_is_fresh,
                 kill_switch_enabled=False,
+                current_position=account.positions.get(symbol),
             )
         )
 
@@ -213,6 +217,7 @@ def run_once(
         symbols = SYMBOLS
 
     executor = PaperExecutor(fee_bps=fee_bps, slippage_bps=slippage_bps)
+    exit_engine = ExitEngine()
     now = datetime.now(UTC)
     results: list[CycleResult] = []
     notify = notifier or LogNotifier()
@@ -242,6 +247,7 @@ def run_once(
                     ai_scorer=ai_scorer,
                     session_factory=session_factory,
                     min_notional_usdt=min_notional,
+                    exit_engine=exit_engine,
                 )
                 results.append(result)
             except Exception as exc:

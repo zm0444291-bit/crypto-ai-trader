@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from fastapi.testclient import TestClient
 
+from trading.dashboard_api import routes_runtime
 from trading.execution.paper_executor import PaperFill, PaperOrder
 from trading.main import app
 from trading.storage.db import Base, create_database_engine, create_session_factory
@@ -227,6 +228,28 @@ class TestRuntimeStatusWithData:
 
         assert response.status_code == 200
         assert response.json()["orders_last_hour"] == 2
+
+    def test_runtime_status_does_not_write_reconciliation_events(self, tmp_path, monkeypatch):
+        database_url = f"sqlite:///{tmp_path}/status_readonly.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        client = TestClient(app)
+        # Poll status multiple times like dashboard polling.
+        assert client.get("/runtime/status").status_code == 200
+        assert client.get("/runtime/status").status_code == 200
+
+        with session_factory() as session:
+            events_repo = EventsRepository(session)
+            recon_events = events_repo.list_recent(
+                limit=50,
+                component="reconciliation",
+            )
+
+        # /runtime/status must remain read-only wrt event store.
+        assert recon_events == []
 
 
 class TestRuntimeStatusHeartbeatFields:
@@ -610,6 +633,64 @@ class TestRuntimeStatusShadowFields:
         assert body["last_shadow_time"] is None
 
 
+class TestRuntimeStatusReconciliationField:
+    """The reconciliation field is present and populated in /runtime/status responses."""
+
+    def test_empty_db_returns_ok_reconciliation(self, tmp_path, monkeypatch):
+        """Empty DB returns reconciliation with ok status and valid last_check_time.
+
+        Reconciliation runs in the success path (DB is available via the tmp_path engine),
+        so last_check_time is populated. The diff is OK because the mock interface
+        balance (500 USDT) matches the initial cash (500 USDT).
+        """
+        database_url = f"sqlite:///{tmp_path}/recon_empty.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+
+        client = TestClient(app)
+        response = client.get("/runtime/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "reconciliation" in body
+        assert body["reconciliation"]["status"] == "ok"
+        assert body["reconciliation"]["last_check_time"] is not None
+        assert "balance_diff=" in body["reconciliation"]["diff_summary"]
+
+    def test_fallback_reconciliation_on_db_init_failure(self, monkeypatch):
+        """DB init failure returns reconciliation with ok status and unavailable diff_summary."""
+        monkeypatch.setenv("DATABASE_URL", "/nonexistent/path/recon_init_fail.db")
+        client = TestClient(app)
+        response = client.get("/runtime/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["reconciliation"]["status"] == "ok"
+        assert body["reconciliation"]["diff_summary"] == "unavailable"
+
+    def test_runtime_status_is_read_only_for_reconciliation_events(self, tmp_path, monkeypatch):
+        """Calling /runtime/status must not write reconciliation_* events."""
+        database_url = f"sqlite:///{tmp_path}/recon_event.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        client = TestClient(app)
+
+        # Call the status endpoint
+        response = client.get("/runtime/status")
+        assert response.status_code == 200
+
+        # Check no reconciliation_* events were written by a read-only status call.
+        with session_factory() as session:
+            events_repo = EventsRepository(session)
+            events = events_repo.list_recent(limit=10)
+            recon_events = [e for e in events if e.event_type.startswith("reconciliation_")]
+            assert recon_events == []
+
+
 class TestControlPlaneWriteMode:
     """POST /runtime/control-plane/mode — safe, audited mode changes."""
 
@@ -899,3 +980,36 @@ class TestControlPlaneWriteConsistency:
         # Check /runtime/control-plane
         cp_resp = client.get("/runtime/control-plane")
         assert cp_resp.json()["lock_enabled"] is True
+
+
+class TestLocalSystemExit:
+    """POST /runtime/system/exit schedules local shutdown safely."""
+
+    def test_exit_endpoint_schedules_shutdown(self, monkeypatch):
+        client = TestClient(app)
+        called = {"value": False}
+
+        def _fake_schedule_local_shutdown(delay_seconds: float = 0.8) -> None:
+            called["value"] = True
+
+        monkeypatch.setattr(
+            routes_runtime,
+            "schedule_local_shutdown",
+            _fake_schedule_local_shutdown,
+        )
+
+        response = client.post("/runtime/system/exit", json={"confirm": True})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["message"] == "shutdown_scheduled"
+        assert called["value"] is True
+
+    def test_exit_endpoint_requires_confirmation(self):
+        client = TestClient(app)
+        response = client.post("/runtime/system/exit", json={"confirm": False})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert body["message"] == "blocked: confirmation_required"
