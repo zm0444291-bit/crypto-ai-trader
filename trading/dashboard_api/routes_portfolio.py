@@ -31,8 +31,9 @@ class PortfolioStatusResponse(BaseModel):
     positions: list[PositionSummary]
 
 
-def _plain_decimal(value: Decimal) -> Decimal:
-    normalized = value.normalize()
+def _plain_decimal(value: Decimal | int | float | str) -> Decimal:
+    decimal_value = value if isinstance(value, Decimal) else Decimal(str(value))
+    normalized = decimal_value.normalize()
     if normalized == normalized.to_integral():
         return normalized.quantize(Decimal("1"))
     return normalized

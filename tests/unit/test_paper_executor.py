@@ -82,3 +82,85 @@ def test_paper_executor_rejects_non_positive_market_price():
 
     assert result.approved is False
     assert result.reject_reasons == ["invalid_market_price"]
+
+
+# ── SELL tests ─────────────────────────────────────────────────────────────────
+
+
+def test_paper_executor_fills_sell_with_fee_and_slippage():
+    executor = PaperExecutor(fee_bps=Decimal("10"), slippage_bps=Decimal("20"))
+
+    result = executor.execute_market_sell(
+        symbol="BTCUSDT",
+        qty=Decimal("1"),
+        market_price=Decimal("100"),
+        executed_at=datetime(2026, 4, 19, 1, 1, tzinfo=UTC),
+    )
+
+    assert result.approved is True
+    assert result.order.symbol == "BTCUSDT"
+    assert result.order.side == "SELL"
+    assert result.order.status == "FILLED"
+    # SELL: slippage reduces price: 100 * (1 - 20/10000) = 99.8
+    assert result.fill.price == Decimal("99.8")
+    assert result.fill.qty == Decimal("1")
+    # fee on SELL proceeds: 99.8 * 10 / 10000 = 0.0998
+    assert result.fill.fee_usdt == Decimal("0.0998")
+    assert result.fill.slippage_bps == Decimal("20")
+
+
+def test_paper_executor_sell_zero_qty_rejected():
+    executor = PaperExecutor()
+
+    result = executor.execute_market_sell(
+        symbol="BTCUSDT",
+        qty=Decimal("0"),
+        market_price=Decimal("100"),
+        executed_at=datetime(2026, 4, 19, 1, 1, tzinfo=UTC),
+    )
+
+    assert result.approved is False
+    assert result.reject_reasons == ["invalid_qty"]
+
+
+def test_paper_executor_sell_negative_qty_rejected():
+    executor = PaperExecutor()
+
+    result = executor.execute_market_sell(
+        symbol="BTCUSDT",
+        qty=Decimal("-1"),
+        market_price=Decimal("100"),
+        executed_at=datetime(2026, 4, 19, 1, 1, tzinfo=UTC),
+    )
+
+    assert result.approved is False
+    assert result.reject_reasons == ["invalid_qty"]
+
+
+def test_paper_executor_sell_zero_price_rejected():
+    executor = PaperExecutor()
+
+    result = executor.execute_market_sell(
+        symbol="BTCUSDT",
+        qty=Decimal("1"),
+        market_price=Decimal("0"),
+        executed_at=datetime(2026, 4, 19, 1, 1, tzinfo=UTC),
+    )
+
+    assert result.approved is False
+    assert result.reject_reasons == ["invalid_market_price"]
+
+
+def test_paper_executor_sell_partial_qty():
+    executor = PaperExecutor(fee_bps=Decimal("10"), slippage_bps=Decimal("0"))
+
+    result = executor.execute_market_sell(
+        symbol="BTCUSDT",
+        qty=Decimal("0.5"),
+        market_price=Decimal("100"),
+        executed_at=datetime(2026, 4, 19, 1, 1, tzinfo=UTC),
+    )
+
+    assert result.approved is True
+    assert result.fill.qty == Decimal("0.5")
+    assert result.order.requested_notional_usdt == Decimal("50")

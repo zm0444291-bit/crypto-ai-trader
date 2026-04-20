@@ -10,7 +10,7 @@ from trading.strategies.base import TradeCandidate
 
 class PaperOrder(BaseModel):
     symbol: str
-    side: Literal["BUY"]
+    side: Literal["BUY", "SELL"]
     order_type: Literal["MARKET"]
     requested_notional_usdt: Decimal
     status: Literal["FILLED"]
@@ -19,7 +19,7 @@ class PaperOrder(BaseModel):
 
 class PaperFill(BaseModel):
     symbol: str
-    side: Literal["BUY"]
+    side: Literal["BUY", "SELL"]
     price: Decimal
     qty: Decimal
     fee_usdt: Decimal
@@ -42,6 +42,15 @@ class PaperExecutor:
     ) -> None:
         self.fee_bps = fee_bps
         self.slippage_bps = slippage_bps
+
+    def _apply_slippage(
+        self, price: Decimal, side: Literal["BUY", "SELL"]
+    ) -> Decimal:
+        """Apply slippage: BUY pays more, SELL receives less."""
+        if side == "BUY":
+            return price * (Decimal("1") + self.slippage_bps / Decimal("10000"))
+        else:
+            return price * (Decimal("1") - self.slippage_bps / Decimal("10000"))
 
     def execute_market_buy(
         self,
@@ -66,7 +75,7 @@ class PaperExecutor:
                 reject_reasons=["invalid_market_price"],
             )
 
-        fill_price = market_price * (Decimal("1") + self.slippage_bps / Decimal("10000"))
+        fill_price = self._apply_slippage(market_price, "BUY")
         fee_usdt = position_size.notional_usdt * self.fee_bps / Decimal("10000")
         qty = (position_size.notional_usdt - fee_usdt) / fill_price
 
@@ -74,7 +83,7 @@ class PaperExecutor:
             approved=True,
             order=PaperOrder(
                 symbol=candidate.symbol,
-                side=candidate.side,
+                side="BUY",
                 order_type="MARKET",
                 requested_notional_usdt=position_size.notional_usdt,
                 status="FILLED",
@@ -82,7 +91,57 @@ class PaperExecutor:
             ),
             fill=PaperFill(
                 symbol=candidate.symbol,
-                side=candidate.side,
+                side="BUY",
+                price=fill_price,
+                qty=qty,
+                fee_usdt=fee_usdt,
+                slippage_bps=self.slippage_bps,
+                filled_at=executed_at,
+            ),
+            reject_reasons=[],
+        )
+
+    def execute_market_sell(
+        self,
+        symbol: str,
+        qty: Decimal,
+        market_price: Decimal,
+        executed_at: datetime,
+    ) -> PaperExecutionResult:
+        """Execute a market sell (full or partial position)."""
+        if qty <= Decimal("0"):
+            return PaperExecutionResult(
+                approved=False,
+                order=None,
+                fill=None,
+                reject_reasons=["invalid_qty"],
+            )
+
+        if market_price <= Decimal("0"):
+            return PaperExecutionResult(
+                approved=False,
+                order=None,
+                fill=None,
+                reject_reasons=["invalid_market_price"],
+            )
+
+        fill_price = self._apply_slippage(market_price, "SELL")
+        notional_usdt = qty * fill_price
+        fee_usdt = notional_usdt * self.fee_bps / Decimal("10000")
+
+        return PaperExecutionResult(
+            approved=True,
+            order=PaperOrder(
+                symbol=symbol,
+                side="SELL",
+                order_type="MARKET",
+                requested_notional_usdt=notional_usdt,
+                status="FILLED",
+                created_at=executed_at,
+            ),
+            fill=PaperFill(
+                symbol=symbol,
+                side="SELL",
                 price=fill_price,
                 qty=qty,
                 fee_usdt=fee_usdt,

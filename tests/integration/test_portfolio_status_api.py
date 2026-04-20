@@ -64,3 +64,19 @@ def test_portfolio_status_rejects_negative_initial_cash():
 
     assert response.status_code == 400
     assert "initial_cash_usdt" in response.json()["detail"]
+
+
+def test_portfolio_status_without_fills_returns_zero_unrealized_pnl():
+    client = TestClient(app)
+
+    response = client.get(
+        "/portfolio/status",
+        params={"initial_cash_usdt": "500"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["cash_balance_usdt"] == "500"
+    assert body["total_equity_usdt"] == "500"
+    assert body["unrealized_pnl_usdt"] == "0"
+    assert body["positions"] == []

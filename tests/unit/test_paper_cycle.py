@@ -8,8 +8,10 @@ from unittest.mock import MagicMock, patch
 from trading.ai.schemas import AIScoreResult
 from trading.execution.gate import LiveTradingLock
 from trading.execution.paper_executor import PaperFill, PaperOrder
+from trading.portfolio.accounting import Position
 from trading.runtime.paper_cycle import CycleInput, run_paper_cycle
 from trading.strategies.base import TradeCandidate
+from trading.strategies.exits import ExitReason, ExitSignal
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -699,3 +701,364 @@ def test_paper_auto_still_executes_paper_path():
 
     # Paper execution should be recorded
     assert len(exec_repo.recorded) == 1
+
+
+# ── Exit-first tests ─────────────────────────────────────────────────────────────
+
+
+def make_position(
+    symbol: str = "BTCUSDT",
+    qty: Decimal = Decimal("1"),
+    avg_entry: Decimal = Decimal("100000"),
+) -> Position:
+    from trading.portfolio.accounting import Position
+
+    return Position(
+        symbol=symbol,
+        qty=qty,
+        avg_entry_price=avg_entry,
+        fees_paid_usdt=Decimal("0"),
+        opened_at=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
+    )
+
+
+class FakeExitEngine:
+    """Fake exit engine that returns a configurable signal or None."""
+
+    def __init__(self, signal: ExitSignal | None = None) -> None:
+        self.signal = signal
+        self.evaluate_calls: list = []
+
+    def evaluate(self, **kwargs) -> ExitSignal | None:
+        self.evaluate_calls.append(kwargs)
+        return self.signal
+
+
+def test_exit_scan_fires_before_entry_candidate_evaluation():
+    """When exit_engine returns a signal, sell executes and entry is skipped."""
+    input_data = make_input()
+    input_data.current_position = make_position()
+
+    fake_session = MagicMock()
+    fake_repo = MagicMock()
+    fake_repo.list_recent.return_value = []
+    fake_session.__enter__ = MagicMock(return_value=fake_session)
+    fake_session.__exit__ = MagicMock(return_value=None)
+
+    def factory() -> MagicMock:
+        return fake_session
+
+    from trading.strategies.exits import ExitSignal
+
+    fake_exit_signal = ExitSignal(
+        symbol="BTCUSDT",
+        reason=ExitReason.HARD_STOP,
+        exit_price=Decimal("98000"),
+        qty_to_exit=Decimal("1"),
+        confidence=Decimal("1.0"),
+        created_at=datetime(2026, 4, 20, 12, 0, tzinfo=UTC),
+        message="Hard stop triggered",
+    )
+    fake_exit_engine = FakeExitEngine(signal=fake_exit_signal)
+
+    # Sell fill returned by executor
+    sell_order = PaperOrder(
+        symbol="BTCUSDT",
+        side="SELL",
+        order_type="MARKET",
+        requested_notional_usdt=Decimal("98000"),
+        status="FILLED",
+        created_at=datetime(2026, 4, 20, 12, 0, tzinfo=UTC),
+    )
+    sell_fill = PaperFill(
+        symbol="BTCUSDT",
+        side="SELL",
+        price=Decimal("98000"),
+        qty=Decimal("1"),
+        fee_usdt=Decimal("0.245"),
+        slippage_bps=Decimal("0"),
+        filled_at=datetime(2026, 4, 20, 12, 0, tzinfo=UTC),
+    )
+    from trading.execution.paper_executor import PaperExecutionResult
+
+    sell_exec_result = PaperExecutionResult(
+        approved=True,
+        order=sell_order,
+        fill=sell_fill,
+        reject_reasons=[],
+    )
+
+    executor = MagicMock()
+    executor.execute_market_sell.return_value = sell_exec_result
+    executor.slippage_bps = Decimal("0")
+
+    ai_scorer = MagicMock()
+    events_repo = FakeEventsRepo()
+    exec_repo = FakeExecRepo()
+
+    with patch(
+        "trading.runtime.paper_cycle.CandlesRepository",
+        return_value=fake_repo,
+    ):
+        with _paper_auto_patches():
+            result = run_paper_cycle(
+                input_data=input_data,
+                events_repo=events_repo,
+                exec_repo=exec_repo,
+                executor=executor,
+                ai_scorer=ai_scorer,
+                session_factory=factory,
+                exit_engine=fake_exit_engine,
+            )
+
+    assert result.status == "exit_executed"
+    assert result.exit_signal is not None
+    assert result.exit_signal.reason == ExitReason.HARD_STOP
+    assert result.exit_executed is True
+    assert result.candidate_present is False
+    assert result.order_executed is False
+
+    # Sell executor was called
+    executor.execute_market_sell.assert_called_once()
+    # Entry executor was NOT called
+    executor.execute_market_buy.assert_not_called()
+    # Entry candidate was never generated (exit happened first)
+    ai_scorer.score_candidate.assert_not_called()
+
+    # exit_signal_generated event was recorded
+    event_types = [ev.event_type for ev in events_repo.events]
+    assert "exit_signal_generated" in event_types
+    assert "order_executed" in event_types
+    assert "cycle_finished" in event_types
+    # No entry signal generated
+    assert "signal_generated" not in event_types
+
+
+def test_exit_scan_no_signal_proceeds_to_entry():
+    """When exit_engine returns None, cycle continues to entry candidate."""
+    input_data = make_input()
+    input_data.current_position = make_position()
+
+    fake_session = MagicMock()
+    fake_repo = MagicMock()
+    fake_repo.list_recent.return_value = []
+    fake_session.__enter__ = MagicMock(return_value=fake_session)
+    fake_session.__exit__ = MagicMock(return_value=None)
+
+    def factory() -> MagicMock:
+        return fake_session
+
+    fake_exit_engine = FakeExitEngine(signal=None)
+
+    ai_scorer = MagicMock()
+    ai_scorer.score_candidate.return_value = make_ai_pass(ai_score=85)
+
+    exec_order = PaperOrder(
+        symbol="BTCUSDT",
+        side="BUY",
+        order_type="MARKET",
+        requested_notional_usdt=Decimal("100"),
+        status="FILLED",
+        created_at=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
+    )
+    exec_fill = PaperFill(
+        symbol="BTCUSDT",
+        side="BUY",
+        price=Decimal("100000"),
+        qty=Decimal("0.001"),
+        fee_usdt=Decimal("0.25"),
+        slippage_bps=Decimal("0"),
+        filled_at=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
+    )
+    from trading.execution.paper_executor import PaperExecutionResult
+
+    exec_result = PaperExecutionResult(
+        approved=True,
+        order=exec_order,
+        fill=exec_fill,
+        reject_reasons=[],
+    )
+    executor = MagicMock()
+    executor.execute_market_buy.return_value = exec_result
+    executor.slippage_bps = Decimal("0")
+
+    events_repo = FakeEventsRepo()
+    exec_repo = FakeExecRepo()
+
+    with patch(
+        "trading.runtime.paper_cycle.CandlesRepository",
+        return_value=fake_repo,
+    ):
+        with patch(
+            "trading.runtime.paper_cycle.generate_momentum_candidate",
+            return_value=make_candidate(),
+        ):
+            with _paper_auto_patches():
+                result = run_paper_cycle(
+                    input_data=input_data,
+                    events_repo=events_repo,
+                    exec_repo=exec_repo,
+                    executor=executor,
+                    ai_scorer=ai_scorer,
+                    session_factory=factory,
+                    exit_engine=fake_exit_engine,
+                )
+
+    # Exit engine was called
+    assert len(fake_exit_engine.evaluate_calls) == 1
+    # Entry still proceeded
+    assert result.status == "executed"
+    assert result.order_executed is True
+    # No exit happened
+    assert result.exit_executed is False
+    assert result.exit_signal is None
+
+
+def test_no_position_skips_exit_scan():
+    """When current_position is None, exit scan is skipped and entry proceeds."""
+    input_data = make_input()
+    input_data.current_position = None  # No open position
+
+    fake_session = MagicMock()
+    fake_repo = MagicMock()
+    fake_repo.list_recent.return_value = []
+    fake_session.__enter__ = MagicMock(return_value=fake_session)
+    fake_session.__exit__ = MagicMock(return_value=None)
+
+    def factory() -> MagicMock:
+        return fake_session
+
+    # Exit engine should NOT be called when there's no position
+    fake_exit_engine = FakeExitEngine(signal=None)
+
+    ai_scorer = MagicMock()
+    ai_scorer.score_candidate.return_value = make_ai_pass(ai_score=85)
+
+    exec_order = PaperOrder(
+        symbol="BTCUSDT",
+        side="BUY",
+        order_type="MARKET",
+        requested_notional_usdt=Decimal("100"),
+        status="FILLED",
+        created_at=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
+    )
+    exec_fill = PaperFill(
+        symbol="BTCUSDT",
+        side="BUY",
+        price=Decimal("100000"),
+        qty=Decimal("0.001"),
+        fee_usdt=Decimal("0.25"),
+        slippage_bps=Decimal("0"),
+        filled_at=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
+    )
+    from trading.execution.paper_executor import PaperExecutionResult
+
+    exec_result = PaperExecutionResult(
+        approved=True,
+        order=exec_order,
+        fill=exec_fill,
+        reject_reasons=[],
+    )
+    executor = MagicMock()
+    executor.execute_market_buy.return_value = exec_result
+    executor.slippage_bps = Decimal("0")
+
+    events_repo = FakeEventsRepo()
+    exec_repo = FakeExecRepo()
+
+    with patch(
+        "trading.runtime.paper_cycle.CandlesRepository",
+        return_value=fake_repo,
+    ):
+        with patch(
+            "trading.runtime.paper_cycle.generate_momentum_candidate",
+            return_value=make_candidate(),
+        ):
+            with _paper_auto_patches():
+                result = run_paper_cycle(
+                    input_data=input_data,
+                    events_repo=events_repo,
+                    exec_repo=exec_repo,
+                    executor=executor,
+                    ai_scorer=ai_scorer,
+                    session_factory=factory,
+                    exit_engine=fake_exit_engine,
+                )
+
+    # Exit engine was never called
+    assert len(fake_exit_engine.evaluate_calls) == 0
+    assert result.order_executed is True
+    assert result.exit_executed is False
+
+
+def test_exit_engine_none_skips_exit_scan():
+    """When exit_engine is None, exit scan is skipped entirely."""
+    input_data = make_input()
+    input_data.current_position = make_position()
+
+    fake_session = MagicMock()
+    fake_repo = MagicMock()
+    fake_repo.list_recent.return_value = []
+    fake_session.__enter__ = MagicMock(return_value=fake_session)
+    fake_session.__exit__ = MagicMock(return_value=None)
+
+    def factory() -> MagicMock:
+        return fake_session
+
+    ai_scorer = MagicMock()
+    ai_scorer.score_candidate.return_value = make_ai_pass(ai_score=85)
+
+    exec_order = PaperOrder(
+        symbol="BTCUSDT",
+        side="BUY",
+        order_type="MARKET",
+        requested_notional_usdt=Decimal("100"),
+        status="FILLED",
+        created_at=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
+    )
+    exec_fill = PaperFill(
+        symbol="BTCUSDT",
+        side="BUY",
+        price=Decimal("100000"),
+        qty=Decimal("0.001"),
+        fee_usdt=Decimal("0.25"),
+        slippage_bps=Decimal("0"),
+        filled_at=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
+    )
+    from trading.execution.paper_executor import PaperExecutionResult
+
+    exec_result = PaperExecutionResult(
+        approved=True,
+        order=exec_order,
+        fill=exec_fill,
+        reject_reasons=[],
+    )
+    executor = MagicMock()
+    executor.execute_market_buy.return_value = exec_result
+    executor.slippage_bps = Decimal("0")
+
+    events_repo = FakeEventsRepo()
+    exec_repo = FakeExecRepo()
+
+    with patch(
+        "trading.runtime.paper_cycle.CandlesRepository",
+        return_value=fake_repo,
+    ):
+        with patch(
+            "trading.runtime.paper_cycle.generate_momentum_candidate",
+            return_value=make_candidate(),
+        ):
+            with _paper_auto_patches():
+                result = run_paper_cycle(
+                    input_data=input_data,
+                    events_repo=events_repo,
+                    exec_repo=exec_repo,
+                    executor=executor,
+                    ai_scorer=ai_scorer,
+                    session_factory=factory,
+                    exit_engine=None,  # No exit engine
+                )
+
+    assert result.status == "executed"
+    assert result.order_executed is True
+    assert result.exit_executed is False
