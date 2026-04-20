@@ -46,7 +46,7 @@ export default function Logs() {
           value={severity}
           onChange={(e) => setSeverity(e.target.value)}
         >
-          <option value="">All Severities</option>
+          <option value="">全部级别</option>
           {SEVERITIES.map((s) => (
             <option key={s} value={s}>{s}</option>
           ))}
@@ -56,7 +56,7 @@ export default function Logs() {
           value={component}
           onChange={(e) => setComponent(e.target.value)}
         >
-          <option value="">All Components</option>
+          <option value="">全部组件</option>
           {COMPONENTS.map((c) => (
             <option key={c} value={c}>{c}</option>
           ))}
@@ -65,23 +65,23 @@ export default function Logs() {
 
       <div className="section">
         <div className="section-header">
-          <span className="section-title">Events ({events.length})</span>
-          {failed && <span className="placeholder-tag">offline</span>}
+          <span className="section-title">事件（{events.length}）</span>
+          {failed && <span className="placeholder-tag">离线</span>}
         </div>
         {loading ? (
-          <div className="empty-state">Loading…</div>
+          <div className="empty-state">加载中…</div>
         ) : events.length === 0 ? (
-          <div className="empty-state">No events match the current filters</div>
+          <div className="empty-state">没有匹配当前筛选条件的事件</div>
         ) : (
           <div className="table-scroll">
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Severity</th>
-                  <th>Component</th>
-                  <th>Type</th>
-                  <th>Message</th>
-                  <th>Time</th>
+                  <th>级别</th>
+                  <th>组件</th>
+                  <th>类型</th>
+                  <th>消息</th>
+                  <th>时间</th>
                 </tr>
               </thead>
               <tbody>

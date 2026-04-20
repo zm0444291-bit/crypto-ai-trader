@@ -18,6 +18,23 @@ fail() { echo -e "${RED}✗ FAIL:${RESET} $1"; }
 
 TOTAL=5
 
+# ---- Stability guards -------------------------------------------------------
+# Prevent parallel runs of this script (common source of apparent hangs).
+# Do not lock in test mode because tests intentionally spawn this script.
+if [[ "${RELEASE_GATE_TEST_MODE:-}" != "1" ]]; then
+    LOCK_DIR="/tmp/crypto_release_gate.lock"
+    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+        echo "✗ release_gate_paper.sh is already running (lock: $LOCK_DIR)"
+        echo "  If stale: rm -rf $LOCK_DIR"
+        exit 1
+    fi
+    cleanup_lock() { rm -rf "$LOCK_DIR" || true; }
+    trap cleanup_lock EXIT
+fi
+
+PYTEST_TIMEOUT_SECONDS="${PYTEST_TIMEOUT_SECONDS:-180}"   # 3m
+BUILD_TIMEOUT_SECONDS="${BUILD_TIMEOUT_SECONDS:-180}"     # 3m
+
 # ── Discover project root ──────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -28,6 +45,80 @@ cd "$PROJECT_ROOT"
 # This prevents recursive calls when tests invoke the script via subprocess.
 _is_test_mode() {
     [[ "${RELEASE_GATE_TEST_MODE:-}" == "1" ]]
+}
+
+_timeout_cmd() {
+    if command -v timeout >/dev/null 2>&1; then
+        echo "timeout"
+        return 0
+    fi
+    if command -v gtimeout >/dev/null 2>&1; then
+        echo "gtimeout"
+        return 0
+    fi
+    echo ""
+}
+
+_run_with_timeout() {
+    local seconds="$1"
+    shift
+    local tcmd
+    tcmd="$(_timeout_cmd)"
+    if [[ -n "$tcmd" ]]; then
+        "$tcmd" "$seconds" "$@"
+    else
+        # Portable fallback when timeout/gtimeout is unavailable (e.g., some macOS setups).
+        python3 - "$seconds" "$@" <<'PY'
+import subprocess
+import sys
+
+timeout_seconds = int(sys.argv[1])
+cmd = sys.argv[2:]
+try:
+    completed = subprocess.run(cmd, timeout=timeout_seconds, check=False)
+    sys.exit(completed.returncode)
+except subprocess.TimeoutExpired:
+    print(f"Command timed out after {timeout_seconds}s: {' '.join(cmd)}")
+    sys.exit(124)
+PY
+    fi
+}
+
+_run_pytest_embedded() {
+    local timeout_seconds="$1"
+    shift
+    .venv/bin/python - "$timeout_seconds" "$@" <<'PY'
+import os
+import sys
+import threading
+import traceback
+
+import pytest
+
+timeout = int(sys.argv[1])
+pytest_args = sys.argv[2:]
+result_code = {"value": 1}
+
+def _run() -> None:
+    try:
+        result_code["value"] = int(pytest.main(pytest_args))
+    except BaseException:  # defensive: convert unexpected errors into gate failure
+        traceback.print_exc()
+        result_code["value"] = 1
+
+worker = threading.Thread(target=_run, daemon=True)
+worker.start()
+worker.join(timeout)
+
+if worker.is_alive():
+    print(f"Command timed out after {timeout}s: .venv/bin/pytest {' '.join(pytest_args)}")
+    os._exit(124)
+
+# Force process exit to avoid rare interpreter-shutdown hangs after pytest summary.
+sys.stdout.flush()
+sys.stderr.flush()
+os._exit(result_code["value"])
+PY
 }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -52,6 +143,11 @@ run_ruff() {
 
 run_pytest() {
     step "2/$TOTAL" "Running pytest…"
+    # Guard against recursion when script is launched from within pytest without test mode.
+    if [[ -n "${PYTEST_CURRENT_TEST:-}" ]] && ! _is_test_mode; then
+        fail "Detected pytest context (PYTEST_CURRENT_TEST) — refusing nested pytest run"
+        return 1
+    fi
     if _is_test_mode; then
         if command -v pytest > /dev/null 2>&1; then
             pass "pytest passed (test mode - command available)"
@@ -60,12 +156,24 @@ run_pytest() {
             fail "pytest not found in PATH (test mode)"
             return 1
         fi
-    elif .venv/bin/pytest -q; then
-        pass "pytest passed"
-        return 0
     else
-        fail "pytest failed"
-        return 1
+        local -a pytest_args
+        pytest_args=(-q)
+        # Avoid self-referential recursion/hangs: gate script invoking tests that invoke gate script.
+        # Can be overridden for explicit deep checks.
+        if [[ "${RELEASE_GATE_INCLUDE_SELF_TESTS:-0}" != "1" ]]; then
+            pytest_args+=(
+                --ignore=tests/unit/test_release_gate_script.py
+                --ignore=tests/integration/test_release_gate_paper.py
+            )
+        fi
+        if _run_pytest_embedded "$PYTEST_TIMEOUT_SECONDS" "${pytest_args[@]}"; then
+            pass "pytest passed"
+            return 0
+        else
+            fail "pytest failed"
+            return 1
+        fi
     fi
 }
 
@@ -79,7 +187,7 @@ build_dashboard() {
             fail "dashboard build failed (test mode - npm or dir missing)"
             return 1
         fi
-    elif cd dashboard && npm run build > /dev/null 2>&1; then
+    elif cd dashboard && _run_with_timeout "$BUILD_TIMEOUT_SECONDS" npm run build; then
         pass "dashboard build succeeded"
         cd "$PROJECT_ROOT"
         return 0

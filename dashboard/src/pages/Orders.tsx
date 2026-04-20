@@ -62,42 +62,42 @@ export default function Orders() {
     <div className="page">
       <div className="aggregate-bar">
         <div className="agg-item">
-          <span className="agg-label">Last 1h — Count</span>
+          <span className="agg-label">最近 1 小时 — 笔数</span>
           <span className="agg-value">{aggregates.count1h}</span>
         </div>
         <div className="agg-item">
-          <span className="agg-label">Last 1h — Notional</span>
+          <span className="agg-label">最近 1 小时 — 名义金额</span>
           <span className="agg-value">${fmtNum(aggregates.notional1h)}</span>
         </div>
         <div className="agg-item">
-          <span className="agg-label">Last 24h — Count</span>
+          <span className="agg-label">最近 24 小时 — 笔数</span>
           <span className="agg-value">{aggregates.count24h}</span>
         </div>
         <div className="agg-item">
-          <span className="agg-label">Last 24h — Notional</span>
+          <span className="agg-label">最近 24 小时 — 名义金额</span>
           <span className="agg-value">${fmtNum(aggregates.notional24h)}</span>
         </div>
       </div>
 
       <div className="section">
         <div className="section-header">
-          <span className="section-title">All Orders ({orders.length})</span>
-          {failed && <span className="placeholder-tag">offline</span>}
+          <span className="section-title">全部订单（{orders.length}）</span>
+          {failed && <span className="placeholder-tag">离线</span>}
         </div>
         {loading ? (
-          <div className="empty-state">Loading…</div>
+          <div className="empty-state">加载中…</div>
         ) : orders.length === 0 ? (
-          <div className="empty-state">No orders</div>
+          <div className="empty-state">暂无订单</div>
         ) : (
           <div className="table-scroll">
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Symbol</th>
-                  <th>Side</th>
-                  <th>Status</th>
-                  <th>Notional</th>
-                  <th>Created</th>
+                  <th>交易对</th>
+                  <th>方向</th>
+                  <th>状态</th>
+                  <th>名义金额</th>
+                  <th>创建时间</th>
                 </tr>
               </thead>
               <tbody>

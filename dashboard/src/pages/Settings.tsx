@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { fmtTime } from '../lib';
 import {
   getHealth,
   getRuntimeStatus,
@@ -6,6 +7,7 @@ import {
   getControlPlane,
   setControlPlaneMode,
   setLiveLock,
+  exitLocalSystem,
   type HealthStatus,
   type RuntimeStatus,
   type MarketDataStatus,
@@ -62,6 +64,8 @@ export default function Settings() {
   const [lockFeedback, setLockFeedback] = useState<{ success: boolean; message: string } | null>(null);
   const [lockDirty, setLockDirty] = useState(false);
   const [lockApplying, setLockApplying] = useState(false);
+  const [exitLoading, setExitLoading] = useState(false);
+  const [exitFeedback, setExitFeedback] = useState<{ success: boolean; message: string } | null>(null);
 
   const refreshControlPlane = useCallback(() => {
     getControlPlane()
@@ -117,7 +121,7 @@ export default function Settings() {
         await refreshControlPlane();
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Unexpected error';
+      const msg = e instanceof Error ? e.message : '未知错误';
       setModeFeedback({ success: false, message: msg });
     } finally {
       setModeLoading(false);
@@ -141,11 +145,31 @@ export default function Settings() {
         await refreshControlPlane();
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Unexpected error';
+      const msg = e instanceof Error ? e.message : '未知错误';
       setLockFeedback({ success: false, message: msg });
     } finally {
       setLockLoading(false);
       setLockApplying(false);
+    }
+  };
+
+  const handleExitSystem = async () => {
+    const ok = window.confirm('确认一键退出系统？这将停止后端、运行时和前端开发服务。');
+    if (!ok) return;
+
+    setExitLoading(true);
+    setExitFeedback(null);
+    try {
+      const res = await exitLocalSystem(true);
+      setExitFeedback({
+        success: true,
+        message: `已执行：${res.message}。服务将在约 1-2 秒内停止。`,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '未知错误';
+      setExitFeedback({ success: false, message: msg });
+    } finally {
+      setExitLoading(false);
     }
   };
 
@@ -159,7 +183,7 @@ export default function Settings() {
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
         </svg>
         <span>
-          This dashboard operates in paper-only mode. No real funds are used. Live trading requires explicit unlock in a future milestone.
+          当前看板仅运行纸面盘模式，不使用真实资金。真实交易需在后续里程碑中显式解锁。
         </span>
       </div>
 
@@ -169,7 +193,7 @@ export default function Settings() {
             <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
             <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
           </svg>
-          <span>Transition guard active — {guardReason}</span>
+          <span>切换守卫已生效 — {guardReason}</span>
         </div>
       )}
 
@@ -180,31 +204,31 @@ export default function Settings() {
           if (runtime.heartbeat_stale_alerting) {
             reminders.push({
               severity: 'danger',
-              message: 'Heartbeat stale — restart the trader process',
+              message: '心跳已过期，请重启交易进程',
             });
           }
           if (runtime.restart_exhausted_ingestion) {
             reminders.push({
               severity: 'danger',
-              message: 'Ingestion restart loop exhausted — verify data source connectivity',
+              message: '行情拉取重启次数耗尽，请检查数据源连通性',
             });
           }
           if (runtime.restart_exhausted_trading) {
             reminders.push({
               severity: 'danger',
-              message: 'Trading restart loop exhausted — check exchange API credentials',
+              message: '交易线程重启次数耗尽，请检查交易所 API 凭据',
             });
           }
           if (runtime.live_trading_lock_enabled) {
             reminders.push({
               severity: 'warning',
-              message: 'Live trading lock active — live orders blocked',
+              message: '真实交易锁已启用，真实下单被阻止',
             });
           }
           if (reminders.length === 0) return null;
           return (
             <div className="settings-section">
-              <div className="settings-title">Current Risk Reminders</div>
+              <div className="settings-title">当前风险提醒</div>
               {reminders.map((r, i) => (
                 <div key={i} className={`reminder-row reminder-${r.severity}`}>
                   <span className={`reminder-dot reminder-dot-${r.severity}`} />
@@ -217,9 +241,9 @@ export default function Settings() {
       )}
 
       <div className="settings-section">
-        <div className="settings-title">System Info</div>
+        <div className="settings-title">系统信息</div>
         <div className="settings-row">
-          <span className="row-label">Mode</span>
+          <span className="row-label">模式</span>
           <span className="row-value">
             {controlPlaneFailed
               ? (runtime?.trade_mode ?? health?.trade_mode ?? '—')
@@ -227,61 +251,125 @@ export default function Settings() {
           </span>
         </div>
         <div className="settings-row">
-          <span className="row-label">Live Trading Enabled</span>
-          <span className="row-value">{health?.live_trading_enabled ? 'Yes' : 'No'}</span>
+          <span className="row-label">已启用真实交易</span>
+          <span className="row-value">{health?.live_trading_enabled ? '是' : '否'}</span>
         </div>
         <div className="settings-row">
-          <span className="row-label">Last Cycle</span>
+          <span className="row-label">最近周期</span>
           <span className="row-value">{runtimeFailed ? '—' : (runtime?.last_cycle_status ?? '—')}</span>
         </div>
         <div className="settings-row">
-          <span className="row-label">Cycles / Hour</span>
+          <span className="row-label">每小时周期数</span>
           <span className="row-value">{runtimeFailed ? '—' : (runtime?.cycles_last_hour ?? '—')}</span>
         </div>
         <div className="settings-row">
-          <span className="row-label">Orders / Hour</span>
+          <span className="row-label">每小时订单数</span>
           <span className="row-value">{runtimeFailed ? '—' : (runtime?.orders_last_hour ?? '—')}</span>
         </div>
       </div>
 
       <div className="settings-section">
-        <div className="settings-title">Market Data</div>
+        <div className="settings-title">市场数据</div>
         <div className="settings-row">
-          <span className="row-label">Connected</span>
-          <span className="row-value">{marketData?.connected ? 'Yes' : 'No'}</span>
+          <span className="row-label">连接状态</span>
+          <span className="row-value">{marketData?.connected ? '已连接' : '未连接'}</span>
         </div>
         <div className="settings-row">
-          <span className="row-label">Symbols</span>
+          <span className="row-label">交易对</span>
           <span className="row-value">{(marketData?.symbols ?? []).join(', ') || '—'}</span>
         </div>
         <div className="settings-row">
-          <span className="row-label">Timeframes</span>
+          <span className="row-label">周期</span>
           <span className="row-value">{(marketData?.timeframes ?? []).join(', ') || '—'}</span>
         </div>
       </div>
 
       <div className="settings-section">
-        <div className="settings-title">Database</div>
+        <div className="settings-title">数据库</div>
         <div className="settings-row">
-          <span className="row-label">Location</span>
+          <span className="row-label">位置</span>
           <span className="row-value">data/crypto_ai_trader.sqlite3</span>
         </div>
       </div>
 
       <div className="settings-section">
-        <div className="settings-title">Execution Control Plane</div>
+        <div className="settings-title">对账（纸面安全）</div>
         <div className="settings-row">
-          <span className="row-label">Lock Enabled</span>
-          <span className="row-value">
-            {controlPlaneFailed
+          <span className="row-label">对账状态</span>
+          <span className={`row-value ${
+            runtimeFailed || !runtime?.reconciliation
+              ? ''
+              : runtime.reconciliation.status === 'ok'
+              ? ''
+              : runtime.reconciliation.status === 'global_pause_recommended'
+              ? 'negative'
+              : runtime.reconciliation.status === 'balance_mismatch' || runtime.reconciliation.status === 'position_mismatch'
+              ? 'negative'
+              : ''
+          }`}>
+            {runtimeFailed || !runtime?.reconciliation
               ? '—'
-              : (controlPlane ?? PLACEHOLDER_CONTROL).lock_enabled
-                ? 'Yes'
-                : 'No'}
+              : runtime.reconciliation.status === 'ok'
+              ? '正常'
+              : runtime.reconciliation.status === 'balance_mismatch'
+              ? '余额差异'
+              : runtime.reconciliation.status === 'position_mismatch'
+              ? '持仓差异'
+              : runtime.reconciliation.status === 'global_pause_recommended'
+              ? '建议全局暂停'
+              : runtime.reconciliation.status === 'unavailable'
+              ? '不可用'
+              : runtime.reconciliation.status ?? '—'}
           </span>
         </div>
         <div className="settings-row">
-          <span className="row-label">Lock Reason</span>
+          <span className="row-label">最后检查时间</span>
+          <span className="row-value">
+            {runtimeFailed || !runtime?.reconciliation
+              ? '—'
+              : runtime.reconciliation.last_check_time
+              ? fmtTime(runtime.reconciliation.last_check_time)
+              : '—'}
+          </span>
+        </div>
+        <div className="settings-row">
+          <span className="row-label">差异摘要</span>
+          <span className="row-value">
+            {runtimeFailed || !runtime?.reconciliation ? '—' : (runtime.reconciliation.diff_summary ?? '—')}
+          </span>
+        </div>
+        <div className="settings-row">
+          <span className="row-label">阈值：余额容差</span>
+          <span className="row-value">1.0 USDT</span>
+        </div>
+        <div className="settings-row">
+          <span className="row-label">阈值：余额临界值</span>
+          <span className="row-value">10.0 USDT</span>
+        </div>
+        <div className="settings-row">
+          <span className="row-label">阈值：持仓数量容差</span>
+          <span className="row-value">0.0001（绝对值）</span>
+        </div>
+        <div className="settings-row">
+          <span className="row-label">阈值：持仓临界数量</span>
+          <span className="row-value">3（触发全局暂停建议）</span>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-title">执行控制平面</div>
+        <div className="settings-row">
+          <span className="row-label">锁定状态</span>
+          <span className="row-value">
+            {controlPlaneFailed
+                ? '—'
+              : (controlPlane ?? PLACEHOLDER_CONTROL).lock_enabled
+                ? '是'
+                : '否'}
+          </span>
+        </div>
+        <div className="settings-row">
+          <span className="row-label">锁定原因</span>
           <span className="row-value">
             {controlPlaneFailed
               ? '—'
@@ -289,7 +377,7 @@ export default function Settings() {
           </span>
         </div>
         <div className="settings-row">
-          <span className="row-label">Execution Route</span>
+          <span className="row-label">执行路由</span>
           <span className="row-value">
             {controlPlaneFailed
               ? '—'
@@ -297,7 +385,7 @@ export default function Settings() {
           </span>
         </div>
         <div className="settings-row">
-          <span className="row-label">Transition Guard</span>
+          <span className="row-label">切换守卫</span>
           <span className="row-value">
             {controlPlaneFailed
               ? '—'
@@ -307,10 +395,10 @@ export default function Settings() {
       </div>
 
       <div className="settings-section">
-        <div className="settings-title">Execution Control Actions</div>
+        <div className="settings-title">执行控制操作</div>
 
         <div className="control-action-group">
-          <div className="control-action-label">Mode</div>
+          <div className="control-action-label">模式</div>
           <div className="control-action-row">
             <select
               className="filter-select"
@@ -325,21 +413,21 @@ export default function Settings() {
               ))}
             </select>
             <label className="toggle-label">
-                <input
-                  type="checkbox"
-                  checked={allowLiveUnlock}
-                  onChange={(e) => {
-                    setAllowLiveUnlock(e.target.checked);
-                    setModeDirty(true);
-                  }}
-                />
-              <span>allow_live_unlock</span>
+              <input
+                type="checkbox"
+                checked={allowLiveUnlock}
+                onChange={(e) => {
+                  setAllowLiveUnlock(e.target.checked);
+                  setModeDirty(true);
+                }}
+              />
+              <span>允许解锁真实交易</span>
             </label>
           </div>
           <input
             className="control-input"
             type="text"
-            placeholder="reason (optional)"
+            placeholder="原因（可选）"
             value={modeReason}
             onChange={(e) => {
               setModeReason(e.target.value);
@@ -354,29 +442,29 @@ export default function Settings() {
             onClick={handleApplyMode}
             disabled={modeLoading}
           >
-            {modeLoading ? 'Applying…' : 'Apply Mode'}
+            {modeLoading ? '应用中…' : '应用模式'}
           </button>
         </div>
 
         <div className="control-action-group">
-          <div className="control-action-label">Live Lock</div>
+          <div className="control-action-label">真实交易锁</div>
           <div className="control-action-row">
             <label className="toggle-label">
-                <input
-                  type="checkbox"
-                  checked={lockEnabled}
-                  onChange={(e) => {
-                    setLockEnabled(e.target.checked);
-                    setLockDirty(true);
-                  }}
-                />
-              <span>enabled</span>
+              <input
+                type="checkbox"
+                checked={lockEnabled}
+                onChange={(e) => {
+                  setLockEnabled(e.target.checked);
+                  setLockDirty(true);
+                }}
+              />
+              <span>启用</span>
             </label>
           </div>
           <input
             className="control-input"
             type="text"
-            placeholder="reason (optional)"
+            placeholder="原因（可选）"
             value={lockReason}
             onChange={(e) => {
               setLockReason(e.target.value);
@@ -391,7 +479,24 @@ export default function Settings() {
             onClick={handleApplyLock}
             disabled={lockLoading}
           >
-            {lockLoading ? 'Applying…' : 'Apply Lock'}
+            {lockLoading ? '应用中…' : '应用锁设置'}
+          </button>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-title">系统退出</div>
+        <div className="control-action-group">
+          <div className="control-action-label">一键关闭本地服务</div>
+          {exitFeedback && (
+            <FeedbackBanner success={exitFeedback.success} message={exitFeedback.message} />
+          )}
+          <button
+            className="control-btn"
+            onClick={handleExitSystem}
+            disabled={exitLoading}
+          >
+            {exitLoading ? '执行中…' : '一键退出系统'}
           </button>
         </div>
       </div>

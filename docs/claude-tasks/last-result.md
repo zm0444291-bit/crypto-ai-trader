@@ -1,58 +1,85 @@
-# Task: E — Align Docs with Paper-Safe Implementation
+# Task Result — Paper-Safe Reconciliation Layer (2026-04-20)
 
 ## Goal
 
-Align README.md, docs/runbook-paper-ops.md, and dashboard/README.md with current code implementation (fields/paths/commands must be consistent).
+Add "pre-live mandatory safety layer": account reconciliation, diff-based circuit breakers, runtime API extension, and dashboard visualization for the paper-safe mode.
 
 ## Status
 
-✅ Complete
+✅ Complete — all components implemented.
 
-## Changes
+---
 
-### 1. README.md
+## Files Added
 
-- **`make runtime-loop` → `make runtime-supervisor`**: The Makefile defines `runtime-supervisor` (with `--supervisor` flag) as the long-running loop target. `runtime-loop` does not exist. Fixed all references (3 occurrences) to use `runtime-supervisor`.
-- **Health check table**: Removed `last_component_error` (not in `/runtime/status` API) and `risk_state` (belongs to `/risk/status`, not `/runtime/status`). Replaced with correct `/runtime/status` fields: `heartbeat_stale_alerting`, `restart_exhausted_ingestion`, `restart_exhausted_trading`.
-- **Symptom table**: Replaced `risk_state: no_new_positions/global_pause/emergency_stop` with the actual runtime status field `restart_exhausted_ingestion` or `restart_exhausted_trading` is `true`.
+| File | Description |
+|------|-------------|
+| `trading/runtime/reconciliation.py` | Reconciliation module: `ReconciliationResult`, `ReconciliationThresholds`, `BalanceSnapshot`, `PositionSnapshot`, `run_reconciliation()`, `record_reconciliation_event()`. Mock data sources for interface comparison. |
+| `tests/unit/test_runtime_reconciliation.py` | 16 unit tests: threshold defaults, perfect match, balance mismatch, position mismatch, global pause triggers, missing assets, default behavior. |
 
-### 2. docs/runbook-paper-ops.md
+---
 
-- **DB init command (section 1.3)**: Fixed wrong import `create_engine` → `create_database_engine` (which is the correct wrapper in `trading.storage.db`). Also removed unused `RuntimeControlRepository` import. Command now uses `AppSettings().database_url` for consistency.
-- **Section 3.4 (GLOBAL_PAUSE)**: Fixed field reference `execution_route` → `execution_route_effective` to match `/runtime/status` API response field name. Also fixed symptom description to use correct field `mode_transition_guard` from `/runtime/status` (not `/runtime/control-plane`).
-- **Appendix API reference**: Removed `last_component_error` from `/runtime/status` field listing (it's not returned by the API). Added note explaining where to find it: `python -m trading.runtime.event_tail --event-type supervisor_component_error --limit 5`.
-
-### 3. dashboard/README.md
-
-- No changes needed — already aligned with current implementation.
-
-## Files Changed
+## Files Modified
 
 | File | Change |
 |------|--------|
-| `README.md` | Fixed `make runtime-loop` → `make runtime-supervisor` (3×); fixed health table fields |
-| `docs/runbook-paper-ops.md` | Fixed DB init command import; fixed section 3.4 field names; fixed API reference appendix |
-| `docs/claude-tasks/last-result.md` | This report |
+| `trading/dashboard_api/routes_runtime.py` | Added `ReconciliationStatusResponse` Pydantic model. Extended `RuntimeStatusResponse` with `reconciliation` field. Reconciliation runs on every `/runtime/status` call (builds local snapshots from DB fills, compares against mock interface). Writes `reconciliation_ok` / `reconciliation_mismatch` events to DB. Safe defaults on all exception paths. |
+| `dashboard/src/api/client.ts` | Added `ReconciliationStatus` interface with `status`, `last_check_time`, `diff_summary` fields. Added `reconciliation` to `RuntimeStatus` interface. |
+| `dashboard/src/pages/Overview.tsx` | Added reconciliation status pill to `StatusStrip`. Added reconciliation metric cards to `RuntimeSection` showing status and diff summary. Updated `PLACEHOLDER_RUNTIME` with placeholder reconciliation data. |
+| `dashboard/src/pages/Settings.tsx` | Added "对账（纸面安全）" section showing: current reconciliation status (translated labels), last check time, diff summary, and hardcoded read-only threshold values. |
+| `tests/integration/test_runtime_status_api.py` | Added `TestRuntimeStatusReconciliationField` with 3 tests: empty DB returns OK reconciliation, fallback on DB init failure returns OK, reconciliation event is written on status call. |
+| `docs/runbook-paper-ops.md` | Added §3.5 Reconciliation with: status values table, response procedures, event inspection commands, threshold reference. Updated API reference appendix with `reconciliation.status`, `reconciliation.last_check_time`, `reconciliation.diff_summary`. |
+
+---
+
+## Reconciliation Logic Summary
+
+- **Status values**: `ok`, `balance_mismatch`, `position_mismatch`, `global_pause_recommended`, `unavailable`
+- **Thresholds**: `balance_diff_usdt=1.0`, `balance_critical_usdt=10.0`, `position_diff_absolute=0.0001`, `position_critical_count=3`
+- **Global pause triggers**: balance diff > 10.0 USDT OR position diff count >= 3
+- **Data sources**: Local snapshots built from DB fills on every `/runtime/status` call; interface snapshots use mock data (paper-safe)
+- **Event types**: `reconciliation_ok` (info) and `reconciliation_mismatch` (warning/error based on severity)
+
+---
 
 ## Verification
 
 ```bash
-# 1. Ruff lint
-cd /Users/zihanma/Desktop/crypto-ai-trader
+# Reconciliation unit tests
+.venv/bin/python -m pytest -q tests/unit/test_runtime_reconciliation.py
+# → 16 passed
+
+# Integration tests for reconciliation field
+.venv/bin/python -m pytest -q tests/integration/test_runtime_status_api.py
+# → 56 passed
+
+# Ruff lint on new/modified files
+.venv/bin/ruff check trading/runtime/reconciliation.py \
+   trading/dashboard_api/routes_runtime.py \
+   tests/unit/test_runtime_reconciliation.py \
+   tests/integration/test_runtime_status_api.py
+# → All checks passed!
+
+# Dashboard build
+cd dashboard && npm run build
+# → ✓ built in 381ms
+
+# Full test suite
+.venv/bin/python -m pytest -q
+# → 441 passed in 12.31s
+
+# Ruff lint on entire project
 .venv/bin/ruff check .
-# Result: All checks passed!
-
-# 2. Pytest
-.venv/bin/pytest -q
-# Result: 349 passed in 11.78s
-
-# 3. Dashboard build
-cd dashboard && npm run build && cd ..
-# Result: ✓ built in 355ms
+# → All checks passed!
 ```
 
-## Residual Risks
+---
 
-1. **API field documentation drift**: As the codebase evolves, `/runtime/status` and `/runtime/control-plane` fields may change. The docs are aligned as of this fix but will drift again without a sync mechanism.
-2. **Dashboard README is minimal**: The dashboard README is short and mostly accurate. No changes were needed, but it lacks detail on the control panel features added in previous tasks.
-3. **`runtime-loop` Makefile target**: The Makefile only has `runtime-supervisor`, not `runtime-loop`. If a future Makefile change adds `runtime-loop`, the README would need to reflect the distinction.
+## Constraints Respected
+
+- ✅ No live trading enabled
+- ✅ No lock bypass controls added
+- ✅ No changes to A/B line files (`paper_executor`, `accounting`, `live_executor`, `binance_filters`)
+- ✅ Partial-failure behavior preserved (single panel failure doesn't drag down global)
+- ✅ Safe defaults on all API exception paths (never 500)
+- ✅ Not committed to git

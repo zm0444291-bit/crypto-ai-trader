@@ -127,6 +127,27 @@ make runtime-tail-events
 make runtime-health
 ```
 
+### 2.3.1 macOS launchd (recommended for long local runs)
+
+```bash
+# Install and start LaunchAgent (auto-restart + login auto-start)
+make runtime-agent-install
+
+# Status and logs
+make runtime-agent-status
+make runtime-agent-logs
+
+# Stop and remove
+make runtime-agent-stop
+make runtime-agent-uninstall
+```
+
+Optional custom runtime values:
+
+```bash
+INGEST_INTERVAL=120 TRADE_INTERVAL=60 RUNTIME_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT make runtime-agent-install
+```
+
 ### 2.4 Periodic Inspection Commands
 
 ```bash
@@ -193,6 +214,71 @@ curl -s http://localhost:8000/runtime/status | \
 3. If `trade_mode` is `live_small_auto`: **this should never happen in paper-safe** — verify `live_trading_enabled: false` and `require_manual_unlock: true` in config
 4. Resolve root cause before resuming
 
+### 3.5 Reconciliation (`reconciliation.status` in `/runtime/status`)
+
+**Symptom**: `reconciliation.status` is not `"ok"` in the runtime status response.
+
+Reconciliation runs automatically on every `/runtime/status` call and writes a `reconciliation_ok` or `reconciliation_mismatch` event to the database.
+
+#### Reconciliation Status Values
+
+| Status | Severity | Meaning |
+|--------|----------|---------|
+| `ok` | info | Balances and positions match within tolerance |
+| `balance_mismatch` | warning | Cash balance differs beyond tolerance (default: 1.0 USDT) |
+| `position_mismatch` | warning | One or more position quantities differ beyond tolerance |
+| `global_pause_recommended` | error | Critical threshold exceeded — full pause recommended |
+| `unavailable` | — | Reconciliation could not run (e.g., DB unavailable) |
+
+#### Response
+
+1. **Check the diff summary**: Look at `reconciliation.diff_summary` in `/runtime/status` for the detailed diff (e.g. `balance_diff=2.5 USDT, position_diffs=0, global_pause=false`).
+
+2. **Balance mismatch**: Investigate why local tracked balance diverges from the exchange interface:
+   - Paper fills may have rounding differences
+   - Fees may not match the exchange-reported fee schedule
+   - Check `GET /events/recent?event_type=reconciliation_mismatch` for the latest mismatch event
+
+3. **Position mismatch**: Check which symbol positions differ:
+   - Query fills: `GET /orders/recent` and reconstruct positions
+   - Verify no fills were lost during a restart
+
+4. **global_pause_recommended**: This triggers only when:
+   - `balance_diff > 10.0 USDT` (critical threshold), OR
+   - `position_diff_count >= 3` (3+ positions differ simultaneously)
+
+   **Response for global_pause_recommended**:
+   ```bash
+   # Pause paper trading immediately
+   curl -X POST http://localhost:8000/runtime/control-plane/mode \
+     -H "Content-Type: application/json" \
+     -d '{"to_mode": "paused", "reason": "Reconciliation global pause"}'
+   ```
+   Then investigate root cause before resuming.
+
+#### Viewing Reconciliation Events
+
+```bash
+# View latest reconciliation events
+curl -s "http://localhost:8000/events/recent?event_type=reconciliation_ok&limit=5"
+curl -s "http://localhost:8000/events/recent?event_type=reconciliation_mismatch&limit=5"
+
+# Or via event_tail CLI
+python -m trading.runtime.event_tail --event-type reconciliation_ok --limit 5
+python -m trading.runtime.event_tail --event-type reconciliation_mismatch --limit 5
+```
+
+#### Reconciliation Thresholds (Read-Only)
+
+| Threshold | Default | Description |
+|-----------|---------|-------------|
+| `balance_diff_usdt` | 1.0 USDT | Balance diff triggers `balance_mismatch` |
+| `balance_critical_usdt` | 10.0 USDT | Balance diff triggers `global_pause_recommended` |
+| `position_diff_absolute` | 0.0001 | Position quantity diff triggers mismatch |
+| `position_critical_count` | 3 | Number of position diffs to trigger global pause |
+
+These thresholds are defined in `trading/runtime/reconciliation.py` and are not yet runtime-configurable. They are displayed read-only in **Settings > 对账（纸面安全）**.
+
 ---
 
 ## 4. Recovery Procedure
@@ -228,6 +314,13 @@ This sets `live_trading_lock_enabled: true` which blocks `live_shadow` and `live
 bash scripts/release_gate_paper.sh
 # Only proceed if gate passes:
 make runtime-supervisor
+```
+
+If using launchd instead of foreground runtime:
+
+```bash
+make runtime-agent-restart
+make runtime-agent-status
 ```
 
 ### 4.4 Recovering from Restart Exhaustion
@@ -403,6 +496,9 @@ orders_last_hour                     int
 shadow_executions_last_hour          int
 last_shadow_time                     string|null  ISO timestamp
 mode_transition_guard                string|null  reason string from validate_mode_transition
+reconciliation.status                string       ok / balance_mismatch / position_mismatch / global_pause_recommended / unavailable
+reconciliation.last_check_time       string|null  ISO timestamp of last reconciliation run
+reconciliation.diff_summary          string       human-readable diff summary
 
 Note: `last_component_error` is stored in DB events only; it is not exposed in any API endpoint. Query it via:
 ```

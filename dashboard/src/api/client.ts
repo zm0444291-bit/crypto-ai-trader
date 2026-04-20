@@ -59,6 +59,19 @@ export interface EventsSummary {
   context?: Record<string, unknown>;
 }
 
+export type ReconciliationStatusValue =
+  | 'ok'
+  | 'balance_mismatch'
+  | 'position_mismatch'
+  | 'global_pause_recommended'
+  | 'unavailable';
+
+export interface ReconciliationStatus {
+  status: ReconciliationStatusValue;
+  last_check_time: string | null;
+  diff_summary: string;
+}
+
 export interface RuntimeStatus {
   last_cycle_status: string | null;
   last_cycle_time: string | null;
@@ -84,6 +97,7 @@ export interface RuntimeStatus {
   mode_transition_guard: string | null;
   shadow_executions_last_hour: number;
   last_shadow_time: string | null;
+  reconciliation: ReconciliationStatus | null;
 }
 
 export interface ControlPlaneResponse {
@@ -117,6 +131,11 @@ export interface LiveLockChangeResponse {
   success: boolean;
   lock_enabled: boolean;
   reason: string;
+}
+
+export interface SystemExitResponse {
+  success: boolean;
+  message: string;
 }
 
 // ── Fetch helper ──────────────────────────────────────────────────────────────
@@ -210,6 +229,20 @@ export async function setLiveLock(
     throw new Error(msg);
   }
   return data as LiveLockChangeResponse;
+}
+
+export async function exitLocalSystem(confirm = true): Promise<SystemExitResponse> {
+  const res = await fetch(`${BASE_URL}/runtime/system/exit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirm }),
+  });
+  const data = await res.json() as SystemExitResponse | { detail: string };
+  if (!res.ok || (('success' in data) && !data.success)) {
+    const msg = 'detail' in data ? data.detail : (data as SystemExitResponse).message;
+    throw new Error(msg);
+  }
+  return data as SystemExitResponse;
 }
 
 // ── Analytics types ──────────────────────────────────────────────────────────

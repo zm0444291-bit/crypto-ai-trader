@@ -1,33 +1,33 @@
 const EXTENSIONS = [
   {
     name: 'FuturesMomentumTemplate',
-    description: 'Momentum-based futures signal generation',
-    milestone: 'Milestone 8',
+    description: '基于动量的期货信号生成',
+    milestone: '里程碑 8',
   },
   {
     name: 'OrderBookImbalanceTemplate',
-    description: 'Detect order book pressure shifts',
-    milestone: 'Milestone 9',
+    description: '检测订单簿压力变化',
+    milestone: '里程碑 9',
   },
   {
     name: 'CrossExchangeArbitrageTemplate',
-    description: 'Multi-exchange price discrepancy capture',
-    milestone: 'Milestone 10',
+    description: '捕捉多交易所价差机会',
+    milestone: '里程碑 10',
   },
   {
     name: 'NewsSentimentTemplate',
-    description: 'NLP-driven news sentiment signals',
-    milestone: 'Milestone 11',
+    description: '基于 NLP 的新闻情绪信号',
+    milestone: '里程碑 11',
   },
   {
     name: 'OnchainFlowTemplate',
-    description: 'On-chain fund flow analysis',
-    milestone: 'Milestone 12',
+    description: '链上资金流分析',
+    milestone: '里程碑 12',
   },
   {
     name: 'MLSignalTemplate',
-    description: 'Machine learning price prediction',
-    milestone: 'Milestone 13',
+    description: '机器学习价格预测',
+    milestone: '里程碑 13',
   },
 ];
 
@@ -39,7 +39,7 @@ export default function Extensions() {
           <div key={ext.name} className="extension-card">
             <div className="ext-name">{ext.name}</div>
             <div className="ext-desc">{ext.description}</div>
-            <span className="ext-badge">Disabled — {ext.milestone}</span>
+            <span className="ext-badge">未启用 — {ext.milestone}</span>
           </div>
         ))}
       </div>

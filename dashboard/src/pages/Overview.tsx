@@ -25,7 +25,7 @@ const PLACEHOLDER_RISK: RiskStatus = {
   risk_state: 'normal',
   daily_pnl_pct: '0',
   max_trade_risk_usdt: '7.5',
-  reason: 'placeholder — backend offline',
+  reason: '占位数据 — 后端离线',
 };
 
 const PLACEHOLDER_PORTFOLIO: PortfolioStatus = {
@@ -41,7 +41,7 @@ const PLACEHOLDER_EVENTS: EventsSummary[] = [
     event_type: 'backend_unavailable',
     severity: 'warning',
     component: 'dashboard',
-    message: 'Backend offline — placeholder data shown',
+    message: '后端离线，显示占位数据',
     created_at: new Date().toISOString(),
   },
 ];
@@ -49,7 +49,7 @@ const PLACEHOLDER_EVENTS: EventsSummary[] = [
 const PLACEHOLDER_RUNTIME: RuntimeStatus = {
   last_cycle_status: null,
   last_cycle_time: null,
-  last_error_message: 'backend unavailable',
+  last_error_message: '后端不可用',
   cycles_last_hour: 0,
   orders_last_hour: 0,
   supervisor_alive: null,
@@ -71,6 +71,11 @@ const PLACEHOLDER_RUNTIME: RuntimeStatus = {
   mode_transition_guard: null,
   shadow_executions_last_hour: 0,
   last_shadow_time: null,
+  reconciliation: {
+    status: 'ok',
+    last_check_time: null,
+    diff_summary: '占位数据 — 后端离线',
+  },
 };
 
 // ── Sub-components ───────────────────────────────────────────────────────────
@@ -78,8 +83,8 @@ const PLACEHOLDER_RUNTIME: RuntimeStatus = {
 function LastUpdatedStamp({ date }: { date: Date | null }) {
   if (!date) return null;
   return (
-    <span className="last-updated">
-      Updated {date.toLocaleTimeString('en-US', {
+      <span className="last-updated">
+      更新时间 {date.toLocaleTimeString('zh-CN', {
         hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
       })}
     </span>
@@ -91,37 +96,54 @@ function StatusStrip({
   risk,
   healthFailed,
   riskFailed,
+  runtime,
 }: {
   health: HealthStatus | null;
   risk: RiskStatus | null;
   healthFailed: boolean;
   riskFailed: boolean;
+  runtime: RuntimeStatus | null;
 }) {
   const displayRisk = riskFailed ? PLACEHOLDER_RISK : risk;
+  const reconciliation = runtime?.reconciliation;
+  const reconStatus = reconciliation?.status ?? 'ok';
+  const reconDotClass = reconStatus === 'ok'
+    ? 'dot-normal'
+    : reconStatus === 'balance_mismatch' || reconStatus === 'position_mismatch'
+    ? 'dot-degraded'
+    : reconStatus === 'global_pause_recommended'
+    ? 'dot-stale'
+    : 'dot-disabled';
+
   return (
     <div className="status-strip">
       <div className="status-pill">
-        <span className="label">Mode</span>
+        <span className="label">模式</span>
         <span className="value">
           {health?.trade_mode ?? (healthFailed ? 'paper_auto' : '—')}
         </span>
       </div>
       <div className="status-pill">
-        <span className="label">Live Trading</span>
+        <span className="label">真实交易</span>
         <span className="value">
           {health
-            ? health.live_trading_enabled ? 'Enabled' : 'Disabled'
-            : (healthFailed ? 'Disabled' : '—')}
+            ? health.live_trading_enabled ? '已启用' : '未启用'
+            : (healthFailed ? '未启用' : '—')}
         </span>
       </div>
       <div className="status-pill">
         <span className={`dot ${displayRisk ? riskDot(displayRisk.risk_state) : (riskFailed ? 'dot-placeholder' : 'dot-disabled')}`} />
-        <span className="label">Risk State</span>
+        <span className="label">风险状态</span>
         <span className="value">{displayRisk?.risk_state ?? (riskFailed ? 'normal' : '—')}</span>
       </div>
       <div className="status-pill">
-        <span className="label">Profile</span>
+        <span className="label">档位</span>
         <span className="value">{displayRisk?.risk_profile.name ?? (riskFailed ? 'small_balanced' : '—')}</span>
+      </div>
+      <div className="status-pill">
+        <span className={`dot ${reconDotClass}`} />
+        <span className="label">对账</span>
+        <span className="value">{reconStatus === 'ok' ? '正常' : reconStatus}</span>
       </div>
     </div>
   );
@@ -153,25 +175,25 @@ function MetricsGrid({
   return (
     <div className="metrics-grid">
       <div className="metric-card">
-        <div className="metric-label">Account Equity</div>
+        <div className="metric-label">账户权益</div>
         <div className={`metric-value ${portfolioFailed && equity === null ? 'placeholder' : ''}`}>
           {equity !== null ? `$${fmtNum(equity)}` : (portfolioFailed ? '$500.00' : '—')}
         </div>
       </div>
       <div className="metric-card">
-        <div className="metric-label">Cash Balance</div>
+        <div className="metric-label">现金余额</div>
         <div className={`metric-value ${portfolioFailed && cash === null ? 'placeholder' : ''}`}>
           {cash !== null ? `$${fmtNum(cash)}` : (portfolioFailed ? '$500.00' : '—')}
         </div>
       </div>
       <div className="metric-card">
-        <div className="metric-label">Today PnL</div>
+        <div className="metric-label">当日盈亏</div>
         <div className={`metric-value ${pnlClass}`}>
           {pnlPct !== null ? fmtPct(pnlPct) : (riskFailed ? '+0.00%' : '—')}
         </div>
       </div>
       <div className="metric-card">
-        <div className="metric-label">Max Trade Risk</div>
+        <div className="metric-label">单笔最大风险</div>
         <div className={`metric-value ${riskFailed && maxRisk === null ? 'placeholder' : ''}`}>
           {maxRisk !== null ? `$${fmtNum(maxRisk)}` : (riskFailed ? '$7.50' : '—')}
         </div>
@@ -184,21 +206,21 @@ function PositionsSection({ positions }: { positions: PortfolioStatus['positions
   return (
     <div className="section">
       <div className="section-header">
-        <span className="section-title">Positions</span>
+        <span className="section-title">持仓</span>
       </div>
       {positions === null || positions.length === 0 ? (
-        <div className="empty-state">No open positions</div>
+        <div className="empty-state">暂无持仓</div>
       ) : (
         <div className="table-scroll">
           <table className="data-table">
             <thead>
               <tr>
-                <th>Symbol</th>
-                <th>Qty</th>
-                <th>Avg Entry</th>
-                <th>Mkt Price</th>
-                <th>Mkt Value</th>
-                <th>Unreal. PnL</th>
+                <th>交易对</th>
+                <th>数量</th>
+                <th>平均开仓价</th>
+                <th>市场价</th>
+                <th>市值</th>
+                <th>未实现盈亏</th>
               </tr>
             </thead>
             <tbody>
@@ -228,25 +250,25 @@ function OrdersSection({ orders }: { orders: OrderSummary[] | null }) {
   return (
     <div className="section">
       <div className="section-header">
-        <span className="section-title">Recent Orders</span>
+        <span className="section-title">最近订单</span>
       </div>
       {orders === null || orders.length === 0 ? (
-        <div className="empty-state">No recent orders</div>
+        <div className="empty-state">暂无订单</div>
       ) : (
         <div className="table-scroll">
           <table className="data-table">
             <thead>
               <tr>
-                <th>Symbol</th>
-                <th>Side</th>
-                <th>Status</th>
-                <th>Notional</th>
-                <th>Created</th>
+                <th>交易对</th>
+                <th>方向</th>
+                <th>状态</th>
+                <th>名义金额</th>
+                <th>创建时间</th>
               </tr>
             </thead>
             <tbody>
               {orders.map((o) => (
-                <tr key={o.id}>
+                <tr key={o.id ?? `order-${o.symbol}-${o.created_at}`}>
                   <td>{o.symbol}</td>
                   <td className={o.side === 'BUY' ? 'side-buy' : 'side-sell'}>{o.side}</td>
                   <td>{o.status}</td>
@@ -274,21 +296,21 @@ function EventsSection({
   return (
     <div className="section">
       <div className="section-header">
-        <span className="section-title">Recent Events</span>
-        {isPlaceholder && <span className="placeholder-tag">placeholder</span>}
+        <span className="section-title">最近事件</span>
+        {isPlaceholder && <span className="placeholder-tag">占位</span>}
       </div>
       {displayEvents === null || displayEvents.length === 0 ? (
-        <div className="empty-state">No recent events</div>
+        <div className="empty-state">暂无事件</div>
       ) : (
         <div className="table-scroll">
           <table className="data-table">
             <thead>
               <tr>
-                <th>Severity</th>
-                <th>Component</th>
-                <th>Type</th>
-                <th>Message</th>
-                <th>Time</th>
+                <th>级别</th>
+                <th>组件</th>
+                <th>类型</th>
+                <th>消息</th>
+                <th>时间</th>
               </tr>
             </thead>
             <tbody>
@@ -310,11 +332,11 @@ function EventsSection({
 }
 
 function formatUptime(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 60) return `${seconds}秒`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}分`;
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
-  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  return m > 0 ? `${h}小时 ${m}分` : `${h}小时`;
 }
 
 function ExecutionStatusBanner({ runtime }: { runtime: RuntimeStatus | null }) {
@@ -328,26 +350,26 @@ function ExecutionStatusBanner({ runtime }: { runtime: RuntimeStatus | null }) {
   // Guard blocked — always show first, before any mode-specific text
   if (mode_transition_guard && mode_transition_guard.startsWith('blocked:')) {
     const reason = mode_transition_guard.replace('blocked: ', '');
-    label = `Mode transition blocked — see Settings > Execution Control`;
+    label = `模式切换被阻止，请查看 设置 > 执行控制`;
     labelClass = 'exec-banner-blocked';
     void reason; // stored in runtime.mode_transition_guard for Settings to surface
   } else if (live_trading_lock_enabled) {
-    label = 'Live execution blocked — lock is active';
+    label = '真实执行被阻止，锁定已启用';
     labelClass = 'exec-banner-locked';
   } else if (trade_mode === 'paper_auto' || trade_mode === 'paper') {
-    label = 'Paper execution active';
+    label = '纸面执行中';
     labelClass = 'exec-banner-paper';
   } else if (trade_mode === 'dry_run') {
-    label = 'Dry-run mode — no real orders';
+    label = '演练模式，不会真实下单';
     labelClass = 'exec-banner-dryrun';
   } else if (trade_mode === 'live_shadow') {
-    label = 'Shadow mode — live prices, no execution';
+    label = '影子模式，使用实时价格但不执行';
     labelClass = 'exec-banner-shadow';
   } else if (trade_mode === 'live_small_auto') {
-    label = 'Live execution active';
+    label = '真实执行中';
     labelClass = 'exec-banner-live';
   } else {
-    label = `Mode: ${trade_mode}`;
+    label = `模式：${trade_mode}`;
     labelClass = 'exec-banner-default';
   }
 
@@ -355,7 +377,7 @@ function ExecutionStatusBanner({ runtime }: { runtime: RuntimeStatus | null }) {
     <div className={`exec-status-banner ${labelClass}`}>
       <span className="exec-status-dot" />
       <span className="exec-status-label">{label}</span>
-      <span className="exec-status-route">route&nbsp;{execution_route_effective}</span>
+      <span className="exec-status-route">路由&nbsp;{execution_route_effective}</span>
     </div>
   );
 }
@@ -374,18 +396,18 @@ function heartbeatDotClass(alerting: boolean, supervisorAlive: boolean | null): 
 function heartbeatLabel(alerting: boolean, lastHeartbeat: string | null): { label: string; hint: string | null } {
   if (alerting) {
     return {
-      label: 'STALE',
-      hint: lastHeartbeat ? `Last seen ${fmtTime(lastHeartbeat)} — restart trader` : 'No heartbeat — restart trader',
+      label: '过期',
+      hint: lastHeartbeat ? `最后心跳 ${fmtTime(lastHeartbeat)}，请重启交易进程` : '无心跳，请重启交易进程',
     };
   }
-  return { label: 'OK', hint: null };
+  return { label: '正常', hint: null };
 }
 
 /** Human-readable label for the restart-exhausted card. */
 function restartExhaustedLabel(ingestion: boolean, trading: boolean): string {
-  if (ingestion && trading) return 'BOTH EXHAUSTED — check connections';
-  if (ingestion) return 'INGESTION EXHAUSTED — check data source';
-  if (trading) return 'TRADING EXHAUSTED — check exchange API';
+  if (ingestion && trading) return '两侧均耗尽，请检查连接';
+  if (ingestion) return '拉取线程耗尽，请检查数据源';
+  if (trading) return '交易线程耗尽，请检查交易所 API';
   return '—';
 }
 
@@ -404,31 +426,31 @@ function RuntimeSection({
   return (
     <div className="section">
       <div className="section-header">
-        <span className="section-title">Runtime</span>
+        <span className="section-title">运行状态</span>
         <LastUpdatedStamp date={lastUpdated} />
       </div>
       <ExecutionStatusBanner runtime={runtime} />
       <div className="runtime-grid">
         <div className="metric-card">
-          <div className="metric-label">Heartbeat</div>
+          <div className="metric-label">心跳</div>
           <div className="metric-value">
             <span className={`dot ${hbDot}`} />
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Uptime</div>
+          <div className="metric-label">运行时长</div>
           <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
             {display.uptime_seconds !== null ? formatUptime(display.uptime_seconds) : '—'}
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Last Heartbeat</div>
+          <div className="metric-label">最近心跳</div>
           <div className={`metric-value ${display.heartbeat_stale_alerting ? 'negative' : (runtime ? '' : 'placeholder')}`}>
             {display.last_heartbeat_time ? fmtTime(display.last_heartbeat_time) : '—'}
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Heartbeat Alerting</div>
+          <div className="metric-label">心跳告警</div>
           <div className={`metric-value ${display.heartbeat_stale_alerting ? 'negative' : (runtime ? '' : 'placeholder')}`}>
             {display.heartbeat_stale_alerting
               ? <span title={hbInfo.hint ?? undefined}>{hbInfo.label}</span>
@@ -436,93 +458,115 @@ function RuntimeSection({
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Heartbeat Recovered</div>
+          <div className="metric-label">心跳恢复时间</div>
           <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
             {display.last_recovered_time ? fmtTime(display.last_recovered_time) : '—'}
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Last Cycle</div>
+          <div className="metric-label">最近周期</div>
           <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
             {display.last_cycle_status ?? '—'}
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Cycles / Hour</div>
+          <div className="metric-label">每小时周期数</div>
           <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
             {display.cycles_last_hour}
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Orders / Hour</div>
+          <div className="metric-label">每小时订单数</div>
           <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
             {display.orders_last_hour}
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Shadow / Hour</div>
+          <div className="metric-label">每小时影子执行数</div>
           <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
             {display.shadow_executions_last_hour}
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Last Shadow</div>
+          <div className="metric-label">最近影子执行</div>
           <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
             {display.last_shadow_time ? fmtTime(display.last_shadow_time) : '—'}
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Last Error</div>
+          <div className="metric-label">最近错误</div>
           <div className={`metric-value ${display.last_error_message ? 'negative' : (runtime ? '' : 'placeholder')}`}>
-            {display.last_error_message ?? (runtime ? 'none' : '—')}
+            {display.last_error_message ?? (runtime ? '无' : '—')}
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Component Error</div>
+          <div className="metric-label">组件错误</div>
           <div className={`metric-value ${display.last_component_error ? 'negative' : (runtime ? '' : 'placeholder')}`}>
-            {display.last_component_error ?? (runtime ? 'none' : '—')}
+            {display.last_component_error ?? (runtime ? '无' : '—')}
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Trade Mode</div>
+          <div className="metric-label">交易模式</div>
           <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
             {display.trade_mode}
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Live Lock</div>
+          <div className="metric-label">真实交易锁</div>
           <div className={`metric-value ${display.live_trading_lock_enabled ? 'negative' : (runtime ? '' : 'placeholder')}`}>
-            {display.live_trading_lock_enabled ? 'ON' : 'OFF'}
+            {display.live_trading_lock_enabled ? '开启' : '关闭'}
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Execution Route</div>
+          <div className="metric-label">执行路由</div>
           <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
             {display.execution_route_effective}
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Mode Guard</div>
+          <div className="metric-label">模式守卫</div>
           <div className={`metric-value ${display.mode_transition_guard && display.mode_transition_guard.startsWith('blocked') ? 'negative' : (runtime ? '' : 'placeholder')}`}>
             {display.mode_transition_guard ?? (runtime ? '—' : '—')}
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Restart I/T (1h)</div>
+          <div className="metric-label">重启次数 I/T（1h）</div>
           <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
             {display.restart_attempts_ingestion_last_hour}/{display.restart_attempts_trading_last_hour}
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Restart Exhausted</div>
+          <div className="metric-label">重启耗尽</div>
           <div className={`metric-value ${(display.restart_exhausted_ingestion || display.restart_exhausted_trading) ? 'negative' : (runtime ? '' : 'placeholder')}`}>
             {restartExhaustedLabel(display.restart_exhausted_ingestion, display.restart_exhausted_trading)}
           </div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Last Restart</div>
+          <div className="metric-label">最近重启</div>
           <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
             {display.last_restart_time ? fmtTime(display.last_restart_time) : '—'}
+          </div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">对账状态</div>
+          <div className={`metric-value ${
+            (display.reconciliation?.status ?? 'ok') !== 'ok' &&
+            (display.reconciliation?.status ?? 'ok') !== 'unavailable'
+              ? 'negative'
+              : (runtime ? '' : 'placeholder')
+          }`}>
+            {(display.reconciliation?.status ?? 'ok') === 'ok' ? '正常'
+              : (display.reconciliation?.status ?? 'ok') === 'balance_mismatch' ? '余额差异'
+              : (display.reconciliation?.status ?? 'ok') === 'position_mismatch' ? '持仓差异'
+              : (display.reconciliation?.status ?? 'ok') === 'global_pause_recommended' ? '建议暂停'
+              : (display.reconciliation?.status ?? 'ok') === 'unavailable' ? '不可用'
+              : (display.reconciliation?.status ?? '—')}
+          </div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">对账摘要</div>
+          <div className={`metric-value ${runtime ? '' : 'placeholder'}`}>
+            {display.reconciliation?.diff_summary ?? '—'}
           </div>
         </div>
       </div>
@@ -605,6 +649,7 @@ export default function Overview() {
         risk={failures.risk ? null : risk}
         healthFailed={failures.health}
         riskFailed={failures.risk}
+        runtime={failures.runtime ? null : runtime}
       />
 
       <MetricsGrid

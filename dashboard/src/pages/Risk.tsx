@@ -39,10 +39,10 @@ function EventTable({ events, empty }: { events: EventsSummary[]; empty: string 
       <table className="data-table">
         <thead>
           <tr>
-            <th>Severity</th>
-            <th>Component</th>
-            <th>Message</th>
-            <th>Time</th>
+            <th>级别</th>
+            <th>组件</th>
+            <th>消息</th>
+            <th>时间</th>
           </tr>
         </thead>
         <tbody>
@@ -60,7 +60,7 @@ const PLACEHOLDER_RISK: RiskStatus = {
   risk_state: 'normal',
   daily_pnl_pct: '0',
   max_trade_risk_usdt: '7.5',
-  reason: 'placeholder — backend offline',
+  reason: '占位数据 — 后端离线',
 };
 
 const PLACEHOLDER_REJECTS: EventsSummary[] = [];
@@ -125,12 +125,12 @@ export default function Risk() {
   return (
     <div className="page">
       {loading ? (
-        <div className="empty-state">Loading…</div>
+        <div className="empty-state">加载中…</div>
       ) : (
         <>
           <div className="section">
             <div className="section-header">
-              <span className="section-title">Current Risk State</span>
+              <span className="section-title">当前风险状态</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
               <span
@@ -146,24 +146,24 @@ export default function Risk() {
                 {displayRisk?.risk_state ?? 'unknown'}
               </span>
             </div>
-            {displayRisk?.reason && displayRisk.reason !== 'placeholder — backend offline' && (
+            {displayRisk?.reason && displayRisk.reason !== '占位数据 — 后端离线' && (
               <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontFamily: 'var(--mono)' }}>
-                Reason: {displayRisk.reason}
+                原因：{displayRisk.reason}
               </div>
             )}
           </div>
 
           <div className="section">
             <div className="section-header">
-              <span className="section-title">Risk Profile</span>
+              <span className="section-title">风险档位</span>
             </div>
             <div className="thresholds-grid">
               <div className="threshold-card">
-                <div className="thresh-name">Profile</div>
+                <div className="thresh-name">档位</div>
                 <div className="thresh-pct">{displayRisk?.risk_profile.name ?? '—'}</div>
               </div>
               <div className="threshold-card">
-                <div className="thresh-name">Daily PnL %</div>
+                <div className="thresh-name">当日盈亏 %</div>
                 <div className="thresh-pct" style={{
                   color: displayRisk && parseFloat(displayRisk.daily_pnl_pct) >= 0
                     ? 'var(--positive)' : 'var(--negative)'
@@ -172,7 +172,7 @@ export default function Risk() {
                 </div>
               </div>
               <div className="threshold-card">
-                <div className="thresh-name">Max Trade Risk</div>
+                <div className="thresh-name">单笔最大风险</div>
                 <div className="thresh-pct">${fmtNum(displayRisk?.max_trade_risk_usdt ?? '0')}</div>
               </div>
             </div>
@@ -180,23 +180,23 @@ export default function Risk() {
 
           <div className="section">
             <div className="section-header">
-              <span className="section-title">Recent Risk Rejections</span>
+              <span className="section-title">最近风控拒绝</span>
             </div>
-            <EventTable events={rejects} empty="No risk rejections" />
+            <EventTable events={rejects} empty="暂无风控拒绝" />
           </div>
 
           <div className="section">
             <div className="section-header">
-              <span className="section-title">Execution Gate Blocks</span>
+              <span className="section-title">执行网关拦截</span>
             </div>
-            <EventTable events={gateBlocks} empty="No execution gate blocks" />
+            <EventTable events={gateBlocks} empty="暂无网关拦截" />
           </div>
 
           <div className="section">
             <div className="section-header">
-              <span className="section-title">Supervisor Component Errors</span>
+              <span className="section-title">Supervisor 组件错误</span>
             </div>
-            <EventTable events={supervisorErrors} empty="No supervisor errors" />
+            <EventTable events={supervisorErrors} empty="暂无 supervisor 错误" />
           </div>
         </>
       )}

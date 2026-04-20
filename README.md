@@ -39,6 +39,27 @@ make runtime-supervisor                          # 5min ingest + trade intervals
 make runtime-supervisor INGEST_INTERVAL=120 TRADE_INTERVAL=60  # custom intervals
 ```
 
+### Run as a macOS LaunchAgent (recommended for 24/7 local)
+
+```bash
+# install + start (auto-restart, auto-start on login)
+make runtime-agent-install
+
+# inspect and logs
+make runtime-agent-status
+make runtime-agent-logs
+
+# stop / remove
+make runtime-agent-stop
+make runtime-agent-uninstall
+```
+
+Optional runtime tuning before install:
+
+```bash
+INGEST_INTERVAL=120 TRADE_INTERVAL=60 RUNTIME_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT make runtime-agent-install
+```
+
 ### Health checks
 
 ```bash
@@ -92,6 +113,22 @@ Every 60 seconds while running, the supervisor records a `supervisor_heartbeat` 
 - `ingest_thread_alive` / `trading_thread_alive` flags
 - `uptime_seconds` since supervisor start
 - `symbols` being traded
+
+### 24-hour paper soak checklist
+
+Run this once after major changes:
+
+```bash
+make runtime-agent-install
+make backend
+```
+
+Then check every few hours:
+- `/runtime/status` keeps `supervisor_alive=true`
+- `heartbeat_stale_alerting=false`
+- `restart_exhausted_ingestion=false`
+- `restart_exhausted_trading=false`
+- Dashboard keeps refreshing without persistent offline/degraded state
 
 ## Local Paper Trading Quickstart
 
@@ -179,10 +216,13 @@ export MINIMAX_API_KEY=your_minimax_api_key
 # Global endpoint (international): https://api.minimax.io/v1
 # Mainland China endpoint:        https://api.minimaxi.com/v1
 export MINIMAX_BASE_URL=https://api.minimax.io/v1
-export MINIMAX_MODEL=MiniMax-M2.1
+export MINIMAX_MODEL=MiniMax-M2.7
 export MINIMAX_TIMEOUT=30
+make runtime-minimax-smoke
 make runtime-supervisor
 ```
+
+If you use launchd (`make runtime-agent-install`), put the same variables in project `.env` so the agent process can load them.
 
 ## Troubleshooting
 

@@ -16,12 +16,27 @@ const PLACEHOLDER_SIGNALS: SignalEvent[] = [
     event_type: 'cycle_candidate',
     severity: 'info',
     component: 'trading',
-    message: 'Backend offline — placeholder data shown',
+    message: '后端离线，显示占位数据',
     created_at: new Date().toISOString(),
-    decision: 'HOLD',
-    reason: 'no signal',
+    decision: '观望',
+    reason: '无信号',
   },
 ];
+
+function signalTypeLabel(eventType: string): string {
+  switch (eventType) {
+    case 'cycle_candidate':
+      return '候选';
+    case 'cycle_no_signal':
+      return '无信号';
+    case 'cycle_rejected':
+      return '拒绝';
+    case 'cycle_executed':
+      return '已执行';
+    default:
+      return eventType;
+  }
+}
 
 export default function Signals() {
   const [events, setEvents] = useState<SignalEvent[]>([]);
@@ -76,12 +91,12 @@ export default function Signals() {
     <div className="page">
       <div className="section">
         <div className="section-header">
-          <span className="section-title">Signal Counts</span>
+          <span className="section-title">信号统计</span>
         </div>
         <div className="aggregate-bar">
           {SIGNAL_TYPES.map((type) => (
             <div key={type} className="agg-item">
-              <span className="agg-label">{type.replace('cycle_', '')}</span>
+              <span className="agg-label">{signalTypeLabel(type)}</span>
               <span className={`agg-value ${signalClass(type)}`}>{counts[type]}</span>
             </div>
           ))}
@@ -90,24 +105,24 @@ export default function Signals() {
 
       <div className="section">
         <div className="section-header">
-          <span className="section-title">Recent Candidate Events</span>
-          {failed && <span className="placeholder-tag">offline</span>}
+          <span className="section-title">最近候选事件</span>
+          {failed && <span className="placeholder-tag">离线</span>}
         </div>
         {loading ? (
-          <div className="empty-state">Loading…</div>
+          <div className="empty-state">加载中…</div>
         ) : events.length === 0 ? (
-          <div className="empty-state">No signal events</div>
+          <div className="empty-state">暂无信号事件</div>
         ) : (
           <div className="table-scroll">
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Symbol</th>
-                  <th>Type</th>
-                  <th>Decision</th>
-                  <th>Reason</th>
-                  <th>Severity</th>
-                  <th>Time</th>
+                  <th>交易对</th>
+                  <th>类型</th>
+                  <th>决策</th>
+                  <th>原因</th>
+                  <th>级别</th>
+                  <th>时间</th>
                 </tr>
               </thead>
               <tbody>
@@ -123,7 +138,7 @@ export default function Signals() {
                   return (
                     <tr key={e.id}>
                       <td>{symbol}</td>
-                      <td className={signalClass(e.event_type)}>{e.event_type.replace('cycle_', '')}</td>
+                      <td className={signalClass(e.event_type)}>{signalTypeLabel(e.event_type)}</td>
                       <td className={signalClass(e.event_type)}>{decision}</td>
                       <td>{reason}</td>
                       <td><span className={severityBadge(e.severity)}>{e.severity}</span></td>

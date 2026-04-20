@@ -39,8 +39,8 @@ export function fmtPct(v: string | number): string {
 
 export function fmtTime(iso: string): string {
   try {
-    return new Date(iso).toLocaleString('en-US', {
-      month: 'short', day: 'numeric',
+    return new Date(iso).toLocaleString('zh-CN', {
+      month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit', hour12: false,
     });
   } catch {
@@ -56,7 +56,7 @@ export function SafetyBanner() {
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
         <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
       </svg>
-      <span>Read-only paper-mode dashboard — no trade execution, no live trading controls</span>
+      <span>仅纸面盘只读看板：不会真实下单，也不提供真实交易控制</span>
     </div>
   );
 }
@@ -69,7 +69,7 @@ export function OfflineNotice() {
         <line x1="12" y1="8" x2="12" y2="12"/>
         <line x1="12" y1="16" x2="12.01" y2="16"/>
       </svg>
-      <span>Backend offline — showing placeholder data</span>
+      <span>后端离线，当前显示占位数据</span>
     </div>
   );
 }

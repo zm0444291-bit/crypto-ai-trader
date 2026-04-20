@@ -40,20 +40,20 @@ export default function Analytics() {
   return (
     <div className="page">
       {loading ? (
-        <div className="empty-state">Loading…</div>
+        <div className="empty-state">加载中…</div>
       ) : (
         <>
           <div className="analytics-metrics">
             <div className="metric-card">
-              <div className="metric-label">Current Equity</div>
+              <div className="metric-label">当前权益</div>
               <div className="metric-value">${fmtNum(display?.current_equity_usdt ?? '0')}</div>
             </div>
             <div className="metric-card">
-              <div className="metric-label">Day Start Equity</div>
+              <div className="metric-label">日初权益</div>
               <div className="metric-value">${fmtNum(display?.day_start_equity_usdt ?? '0')}</div>
             </div>
             <div className="metric-card">
-              <div className="metric-label">Daily PnL</div>
+              <div className="metric-label">当日盈亏</div>
               <div className={`metric-value ${(parseFloat(display?.daily_pnl_usdt ?? '0') || 0) >= 0 ? 'positive' : 'negative'}`}>
                 {display ? (
                   parseFloat(display.daily_pnl_usdt || '0') >= 0
@@ -63,7 +63,7 @@ export default function Analytics() {
               </div>
             </div>
             <div className="metric-card">
-              <div className="metric-label">Daily PnL %</div>
+              <div className="metric-label">当日盈亏 %</div>
               <div className={`metric-value ${(parseFloat(display?.daily_pnl_pct ?? '0') || 0) >= 0 ? 'positive' : 'negative'}`}>
                 {fmtPct(display?.daily_pnl_pct ?? '0')}
               </div>
@@ -72,34 +72,34 @@ export default function Analytics() {
 
           <div className="analytics-metrics">
             <div className="metric-card">
-              <div className="metric-label">Total Trades</div>
+              <div className="metric-label">总交易数</div>
               <div className="metric-value">{display?.total_trades ?? 0}</div>
             </div>
             <div className="metric-card">
-              <div className="metric-label">Win Rate</div>
+              <div className="metric-label">胜率</div>
               <div className="metric-value">{fmtPct(display?.win_rate_pct ?? '0')}</div>
             </div>
             <div className="metric-card">
-              <div className="metric-label">Avg Win</div>
+              <div className="metric-label">平均盈利</div>
               <div className="metric-value positive">${fmtNum(display?.avg_win_usdt ?? '0')}</div>
             </div>
             <div className="metric-card">
-              <div className="metric-label">Avg Loss</div>
+              <div className="metric-label">平均亏损</div>
               <div className="metric-value negative">${fmtNum(display?.avg_loss_usdt ?? '0')}</div>
             </div>
           </div>
 
           <div className="section">
             <div className="section-header">
-              <span className="section-title">Win / Loss Breakdown</span>
+              <span className="section-title">盈亏拆分</span>
             </div>
             <div className="analytics-metrics">
               <div className="metric-card">
-                <div className="metric-label">Winning Trades</div>
+                <div className="metric-label">盈利笔数</div>
                 <div className="metric-value positive">{display?.winning_trades ?? 0}</div>
               </div>
               <div className="metric-card">
-                <div className="metric-label">Losing Trades</div>
+                <div className="metric-label">亏损笔数</div>
                 <div className="metric-value negative">{display?.losing_trades ?? 0}</div>
               </div>
             </div>
@@ -108,7 +108,7 @@ export default function Analytics() {
           {display && display.equity_snapshots.length > 0 && (
             <div className="section">
               <div className="section-header">
-                <span className="section-title">Equity Snapshots</span>
+                <span className="section-title">权益快照</span>
               </div>
               <div className="snapshot-list">
                 {display.equity_snapshots.map((s, i) => {
@@ -117,8 +117,8 @@ export default function Analytics() {
                   return (
                     <div key={i} className={`snapshot-row ${pnl >= 0 ? 'positive' : 'negative'}`}>
                       <span className="snapshot-date">
-                        {new Date(s.timestamp).toLocaleString('en-US', {
-                          month: 'short', day: 'numeric',
+                        {new Date(s.timestamp).toLocaleString('zh-CN', {
+                          month: '2-digit', day: '2-digit',
                           hour: '2-digit', minute: '2-digit', hour12: false,
                         })}
                       </span>
@@ -131,7 +131,7 @@ export default function Analytics() {
           )}
 
           {failed && (
-            <div className="empty-state">Backend offline — showing placeholder data</div>
+            <div className="empty-state">后端离线，显示占位数据</div>
           )}
         </>
       )}

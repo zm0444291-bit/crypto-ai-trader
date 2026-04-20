@@ -1,4 +1,4 @@
-.PHONY: help install backend dashboard db-init runtime-once runtime-loop runtime-supervisor runtime-health runtime-tail-events check lint test
+.PHONY: help install backend dashboard db-init runtime-once runtime-loop runtime-supervisor runtime-health runtime-tail-events runtime-minimax-smoke runtime-agent-install runtime-agent-start runtime-agent-stop runtime-agent-restart runtime-agent-status runtime-agent-logs runtime-agent-uninstall check lint test
 
 PYTHON=.venv/bin/python
 PYTEST=.venv/bin/pytest
@@ -62,6 +62,43 @@ runtime-health:
 
 runtime-tail-events:
 	$(PYTHON) -m trading.runtime.event_tail
+
+runtime-minimax-smoke:
+	@_AI_SCORING_BACKEND="$$AI_SCORING_BACKEND"; \
+	_MINIMAX_API_KEY="$$MINIMAX_API_KEY"; \
+	_MINIMAX_BASE_URL="$$MINIMAX_BASE_URL"; \
+	_MINIMAX_MODEL="$$MINIMAX_MODEL"; \
+	_MINIMAX_TIMEOUT="$$MINIMAX_TIMEOUT"; \
+	if [ -f .env ]; then \
+		set -a; . ./.env; set +a; \
+	fi; \
+	if [ -n "$$_AI_SCORING_BACKEND" ]; then export AI_SCORING_BACKEND="$$_AI_SCORING_BACKEND"; fi; \
+	if [ -n "$$_MINIMAX_API_KEY" ]; then export MINIMAX_API_KEY="$$_MINIMAX_API_KEY"; fi; \
+	if [ -n "$$_MINIMAX_BASE_URL" ]; then export MINIMAX_BASE_URL="$$_MINIMAX_BASE_URL"; fi; \
+	if [ -n "$$_MINIMAX_MODEL" ]; then export MINIMAX_MODEL="$$_MINIMAX_MODEL"; fi; \
+	if [ -n "$$_MINIMAX_TIMEOUT" ]; then export MINIMAX_TIMEOUT="$$_MINIMAX_TIMEOUT"; fi; \
+	$(PYTHON) scripts/minimax_smoke_test.py
+
+runtime-agent-install:
+	./scripts/macos_launchd_runtime.sh install
+
+runtime-agent-start:
+	./scripts/macos_launchd_runtime.sh start
+
+runtime-agent-stop:
+	./scripts/macos_launchd_runtime.sh stop
+
+runtime-agent-restart:
+	./scripts/macos_launchd_runtime.sh restart
+
+runtime-agent-status:
+	./scripts/macos_launchd_runtime.sh status
+
+runtime-agent-logs:
+	./scripts/macos_launchd_runtime.sh logs
+
+runtime-agent-uninstall:
+	./scripts/macos_launchd_runtime.sh uninstall
 
 check:
 	$(RUFF) check .

@@ -15,17 +15,17 @@ export default function App() {
     <BrowserRouter>
       <div className="app">
         <header className="app-header">
-          <h1>Trading Control Room</h1>
+          <h1>交易控制台</h1>
           <nav className="main-nav">
             {[
-              { to: '/', label: 'Overview' },
-              { to: '/signals', label: 'Signals' },
-              { to: '/orders', label: 'Orders' },
-              { to: '/risk', label: 'Risk' },
-              { to: '/analytics', label: 'Analytics' },
-              { to: '/extensions', label: 'Extensions' },
-              { to: '/logs', label: 'Logs' },
-              { to: '/settings', label: 'Settings' },
+              { to: '/', label: '总览' },
+              { to: '/signals', label: '信号' },
+              { to: '/orders', label: '订单' },
+              { to: '/risk', label: '风控' },
+              { to: '/analytics', label: '分析' },
+              { to: '/extensions', label: '扩展' },
+              { to: '/logs', label: '日志' },
+              { to: '/settings', label: '设置' },
             ].map(({ to, label }) => (
               <NavLink key={to} to={to} className={({ isActive }) => `nav-link${isActive ? ' nav-link-active' : ''}`}>
                 {label}
