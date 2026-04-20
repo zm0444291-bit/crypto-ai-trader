@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -756,6 +757,89 @@ class TestControlPlaneWriteMode:
         body = response.json()
         assert body["success"] is False
         assert "blocked" in body["guard_reason"]
+
+    def test_live_small_auto_uses_backend_risk_state_not_request_body(
+        self, tmp_path, monkeypatch
+    ):
+        """Pre-flight must use backend-resolved risk_state, never request payload risk_state."""
+        database_url = f"sqlite:///{tmp_path}/mode_cp3b.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        # Satisfy transition guard requirements for live_small_auto
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            repo.set_trade_mode("live_shadow")
+            repo.set_live_trading_lock(enabled=True, reason="test_unlock_path")
+
+        captured: dict[str, str] = {}
+
+        def fake_preflight(symbol, allowed_symbols, lock, risk_state):
+            captured["risk_state"] = risk_state
+            return SimpleNamespace(
+                passed=False,
+                blocked_reason="risk:global_pause",
+                checks=[],
+            )
+
+        monkeypatch.setattr(routes_runtime, "_resolve_risk_state", lambda _: "global_pause")
+        monkeypatch.setattr(routes_runtime, "run_pre_flight", fake_preflight)
+
+        client = TestClient(app)
+        response = client.post(
+            "/runtime/control-plane/mode",
+            json={
+                "to_mode": "live_small_auto",
+                "allow_live_unlock": True,
+                "symbol": "BTCUSDT",
+                # Must be ignored by backend:
+                "risk_state": "normal",
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert body["blocked_reason"] == "risk:global_pause"
+        assert captured["risk_state"] == "global_pause"
+
+    def test_live_small_auto_blocks_when_backend_risk_state_unavailable(
+        self, tmp_path, monkeypatch
+    ):
+        """If backend cannot resolve risk state, transition must fail closed."""
+        database_url = f"sqlite:///{tmp_path}/mode_cp3c.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        # Satisfy transition guard requirements for live_small_auto
+        with session_factory() as session:
+            repo = RuntimeControlRepository(session)
+            repo.set_trade_mode("live_shadow")
+            repo.set_live_trading_lock(enabled=True, reason="test_unlock_path")
+
+        monkeypatch.setattr(routes_runtime, "_resolve_risk_state", lambda _: "unavailable")
+
+        client = TestClient(app)
+        response = client.post(
+            "/runtime/control-plane/mode",
+            json={
+                "to_mode": "live_small_auto",
+                "allow_live_unlock": True,
+                "symbol": "BTCUSDT",
+                # Must be ignored by backend:
+                "risk_state": "normal",
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert body["guard_reason"] == "blocked: risk state unavailable"
+        assert body["blocked_reason"] == "risk_state:unavailable"
 
     def test_same_mode_is_noop(self, tmp_path, monkeypatch):
         """Setting the same mode returns success without change."""

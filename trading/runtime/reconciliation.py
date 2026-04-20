@@ -11,6 +11,7 @@ performed or implied by this module.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
@@ -253,4 +254,6 @@ def record_reconciliation_event(
             )
     except Exception:
         # Fail closed: if event recording fails, still don't let it crash the runtime.
-        pass
+        logging.getLogger(__name__).exception(
+            "Failed to record reconciliation event: status=%s", result.status
+        )

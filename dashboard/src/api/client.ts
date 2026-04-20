@@ -114,12 +114,15 @@ export interface ModeChangeRequest {
   to_mode: TradeMode;
   allow_live_unlock: boolean;
   reason?: string;
+  symbol?: string;
 }
 
 export interface ModeChangeResponse {
   success: boolean;
   current_mode: string;
   guard_reason: string;
+  blocked_reason?: string;
+  preflight_checks?: Array<{ code: string; status: string; message: string }>;
 }
 
 export interface LiveLockChangeRequest {
@@ -200,11 +203,12 @@ export async function setControlPlaneMode(
   mode: TradeMode,
   allowLiveUnlock: boolean,
   reason?: string,
+  symbol?: string,
 ): Promise<ModeChangeResponse> {
   const res = await fetch(`${BASE_URL}/runtime/control-plane/mode`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ to_mode: mode, allow_live_unlock: allowLiveUnlock, reason }),
+    body: JSON.stringify({ to_mode: mode, allow_live_unlock: allowLiveUnlock, reason, symbol }),
   });
   const data = await res.json() as ModeChangeResponse | { detail: string };
   if (!res.ok || (('success' in data) && !data.success)) {

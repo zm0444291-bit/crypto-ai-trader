@@ -7,12 +7,20 @@ import threading
 import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
+import yaml
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
+from sqlalchemy.orm import Session, sessionmaker
 
 from trading.execution.gate import TRADE_MODES, compute_execution_route
+from trading.execution.paper_executor import PaperFill
+from trading.portfolio.accounting import PortfolioAccount
+from trading.risk.pre_flight import run_pre_flight
+from trading.risk.profiles import select_risk_profile
+from trading.risk.state import RiskState, classify_daily_loss
 from trading.runtime.config import AppSettings
 from trading.runtime.mode import validate_mode_transition
 from trading.runtime.reconciliation import (
@@ -25,6 +33,7 @@ from trading.runtime.reconciliation import (
 from trading.runtime.state import get_live_trading_lock, get_trade_mode
 from trading.storage.db import create_database_engine, create_session_factory, init_db
 from trading.storage.repositories import (
+    CandlesRepository,
     EventsRepository,
     ExecutionRecordsRepository,
     RuntimeControlRepository,
@@ -192,10 +201,15 @@ def read_runtime_status() -> RuntimeStatusResponse:
                     else:
                         total_qty = pos.qty + fill.qty
                         total_cost = pos.qty * pos.avg_entry_price + fill.qty * fill.price
+                        avg_price = (
+                            total_cost / total_qty
+                            if total_qty != Decimal("0")
+                            else fill.price
+                        )
                         local_positions[fill.symbol] = PositionSnapshot(
                             symbol=fill.symbol,
                             qty=total_qty,
-                            avg_entry_price=total_cost / total_qty,
+                            avg_entry_price=avg_price,
                         )
                 elif fill.side == "SELL":
                     local_usdt_balance += fill.qty * fill.price - fill.fee_usdt
@@ -423,6 +437,8 @@ class ModeChangeRequest(BaseModel):
     to_mode: TRADE_MODES
     allow_live_unlock: bool = False
     reason: str | None = None
+    # Symbol for live trading pre-flight check (required when to_mode=live_small_auto)
+    symbol: str | None = None
 
 
 class ModeChangeResponse(BaseModel):
@@ -431,6 +447,10 @@ class ModeChangeResponse(BaseModel):
     success: bool
     current_mode: str
     guard_reason: str
+    # Machine-readable blocked reason when pre-flight fails (live_small_auto only)
+    blocked_reason: str | None = None
+    # Individual pre-flight check results (present when to_mode=live_small_auto)
+    preflight_checks: list[dict] = []
 
 
 class LiveLockChangeRequest(BaseModel):
@@ -508,7 +528,13 @@ def schedule_local_shutdown(delay_seconds: float = 0.8) -> None:
 
 @router.post("/runtime/control-plane/mode", response_model=ModeChangeResponse)
 def set_mode(body: ModeChangeRequest) -> ModeChangeResponse:
-    """Change the runtime trade mode."""
+    """Change the runtime trade mode.
+
+    When transitioning to live_small_auto, a pre-flight safety check runs first:
+    config completeness, symbol whitelist, live trading lock, and risk circuit
+    breaker. The caller must provide `symbol` in the request body.
+    Risk state is resolved on the backend (single source of truth).
+    """
     try:
         settings = AppSettings()
         engine = create_database_engine(settings.database_url)
@@ -546,6 +572,83 @@ def set_mode(body: ModeChangeRequest) -> ModeChangeResponse:
                 guard_reason=guard.reason,
             )
 
+        # ── Pre-flight safety check for live_small_auto ─────────────────────
+        if body.to_mode == "live_small_auto":
+            # Resolve allowed_symbols from exchanges.yaml
+            allowed_symbols = _load_allowed_symbols()
+            if allowed_symbols is None:
+                return ModeChangeResponse(
+                    success=False,
+                    current_mode=current_mode,
+                    guard_reason="blocked: exchanges.yaml unavailable or invalid",
+                    blocked_reason="config:exchanges_yaml_unavailable",
+                    preflight_checks=[],
+                )
+
+            symbol = (body.symbol or "").strip().upper()
+            if not symbol:
+                return ModeChangeResponse(
+                    success=False,
+                    current_mode=current_mode,
+                    guard_reason="blocked: symbol required for live_small_auto pre-flight",
+                    blocked_reason="preflight:symbol_required",
+                    preflight_checks=[],
+                )
+
+            # Resolve risk_state from the backend (single source of truth).
+            # Fail-closed: unavailable risk state blocks live_small_auto.
+            risk_state = _resolve_risk_state(session_factory)
+            if risk_state == "unavailable":
+                return ModeChangeResponse(
+                    success=False,
+                    current_mode=current_mode,
+                    guard_reason="blocked: risk state unavailable",
+                    blocked_reason="risk_state:unavailable",
+                    preflight_checks=[],
+                )
+
+            preflight = run_pre_flight(
+                symbol=symbol,
+                allowed_symbols=allowed_symbols,
+                lock=lock_state,
+                risk_state=risk_state,
+            )
+
+            preflight_checks = [
+                {"code": c.code, "status": c.status.value, "message": c.message}
+                for c in preflight.checks
+            ]
+
+            if not preflight.passed:
+                # StrEnum inherits from str — use it directly without .value
+                blocked_reason_str = (
+                    preflight.blocked_reason
+                    if preflight.blocked_reason
+                    else "preflight:unknown"
+                )
+                with session_factory() as session:
+                    events_repo = EventsRepository(session)
+                    events_repo.record_event(
+                        event_type="preflight_blocked",
+                        severity="warning",
+                        component="control_plane",
+                        message=f"live_small_auto pre-flight blocked: {blocked_reason_str}",
+                        context={
+                            "symbol": symbol,
+                            "blocked_reason": blocked_reason_str,
+                            "preflight_checks": preflight_checks,
+                            "operator_reason": body.reason,
+                        },
+                    )
+                return ModeChangeResponse(
+                    success=False,
+                    current_mode=current_mode,
+                    guard_reason=f"pre-flight blocked: {blocked_reason_str}",
+                    blocked_reason=blocked_reason_str,
+                    preflight_checks=preflight_checks,
+                )
+
+        # ── Persist mode change ─────────────────────────────────────────────
         with session_factory() as session:
             events_repo = EventsRepository(session)
             repo = RuntimeControlRepository(session)
@@ -566,10 +669,20 @@ def set_mode(body: ModeChangeRequest) -> ModeChangeResponse:
                 },
             )
 
+        # Reuse pre-flight result from the check above (no need to re-run)
+        preflight_checks_out: list[dict] = []
+        if body.to_mode == "live_small_auto":
+            preflight_checks_out = [
+                {"code": c.code, "status": c.status.value, "message": c.message}
+                for c in preflight.checks
+            ]
+
         return ModeChangeResponse(
             success=True,
             current_mode=new_mode,
             guard_reason=guard.reason,
+            blocked_reason=None,
+            preflight_checks=preflight_checks_out,
         )
     except Exception:
         return ModeChangeResponse(
@@ -577,6 +690,95 @@ def set_mode(body: ModeChangeRequest) -> ModeChangeResponse:
             current_mode="paper_auto",
             guard_reason="blocked: unavailable",
         )
+
+
+ResolvedRiskState = RiskState | Literal["unavailable"]
+
+
+def _resolve_risk_state(session_factory: sessionmaker[Session]) -> ResolvedRiskState:
+    """Compute the current risk state from runtime data (single source of truth).
+
+    Reads today's day_baseline_set event for day_start_equity, derives
+    current_equity from persisted fills + latest market prices, then classifies
+    via the existing risk profile logic.
+
+    Fails closed on any error — an unavailable risk state blocks
+    live_small_auto transitions.
+    """
+    try:
+        with session_factory() as session:
+            events_repo = EventsRepository(session)
+            exec_repo = ExecutionRecordsRepository(session)
+            candles_repo = CandlesRepository(session)
+
+            # 1) day_start_equity must come from today's baseline
+            baseline_event = events_repo.get_latest_event_by_type("day_baseline_set")
+            if baseline_event is None:
+                return "unavailable"
+            ctx = baseline_event.context_json or {}
+            baseline_date = ctx.get("date")
+            baseline_str = ctx.get("baseline")
+            today_utc = datetime.now(UTC).date()
+            if baseline_str is None or baseline_date != str(today_utc):
+                return "unavailable"
+            day_start_equity = Decimal(str(baseline_str))
+
+            # 2) rebuild current account snapshot from historical fills
+            account = PortfolioAccount(cash_balance=Decimal("500"))
+            fills = exec_repo.list_fills_chronological()
+            for fill in fills:
+                pf = PaperFill(
+                    symbol=fill.symbol,
+                    side=fill.side,
+                    price=fill.price,
+                    qty=fill.qty,
+                    fee_usdt=fill.fee_usdt,
+                    slippage_bps=fill.slippage_bps,
+                    filled_at=fill.filled_at,
+                )
+                if fill.side == "BUY":
+                    account.apply_buy_fill(pf)
+                elif fill.side == "SELL":
+                    account.apply_sell_fill(pf)
+
+            # 3) mark open positions to latest 15m close (fallback avg entry)
+            market_prices: dict[str, Decimal] = {}
+            for symbol, position in account.positions.items():
+                latest = candles_repo.get_latest(symbol, "15m")
+                if latest is not None:
+                    market_prices[symbol] = Decimal(str(latest.close))
+                else:
+                    market_prices[symbol] = position.avg_entry_price
+            current_equity = max(account.total_equity(market_prices), Decimal("0"))
+
+            # 4) classify via the existing risk system
+            profile = select_risk_profile(current_equity)
+            decision = classify_daily_loss(
+                day_start_equity=day_start_equity,
+                current_equity=current_equity,
+                profile=profile,
+            )
+            return decision.risk_state
+    except Exception:
+        return "unavailable"
+
+
+def _load_allowed_symbols() -> list[str]:
+    """Load allowed_symbols from config/exchanges.yaml."""
+    # Walk up from this file to the project root
+    this_file = Path(__file__).resolve()
+    # dashboard_api/routes_runtime.py -> project_root/config/exchanges.yaml
+    project_root = this_file.parents[2]
+    config_path = project_root / "config" / "exchanges.yaml"
+    try:
+        with config_path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        exchanges = data.get("exchanges", {})
+        binance_cfg = exchanges.get("binance", {})
+        symbols = binance_cfg.get("allowed_symbols", [])
+        return [s.upper() for s in symbols]
+    except Exception:
+        return None  # Signal config error to caller instead of silently returning []
 
 
 @router.post("/runtime/control-plane/live-lock", response_model=LiveLockChangeResponse)

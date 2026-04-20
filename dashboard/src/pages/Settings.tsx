@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { fmtTime } from '../lib';
+import { fmtTime, getReconciliationLabel } from '../lib';
 import {
   getHealth,
   getRuntimeStatus,
@@ -53,6 +53,7 @@ export default function Settings() {
   const [modeValue, setModeValue] = useState<string>('paper_auto');
   const [allowLiveUnlock, setAllowLiveUnlock] = useState(false);
   const [modeReason, setModeReason] = useState('');
+  const [liveSymbol, setLiveSymbol] = useState<string>('BTCUSDT');
   const [modeLoading, setModeLoading] = useState(false);
   const [modeFeedback, setModeFeedback] = useState<{ success: boolean; message: string } | null>(null);
   const [modeDirty, setModeDirty] = useState(false);
@@ -112,8 +113,13 @@ export default function Settings() {
         modeValue as TradeMode,
         allowLiveUnlock,
         modeReason || undefined,
+        liveSymbol,
       );
-      setModeFeedback({ success: res.success, message: res.guard_reason });
+      // Prefer blocked_reason for failures; fall back to guard_reason.
+      const feedbackMsg = !res.success && res.blocked_reason
+        ? `blocked: ${res.blocked_reason}`
+        : res.guard_reason;
+      setModeFeedback({ success: res.success, message: feedbackMsg });
       if (res.success) {
         setModeReason('');
         setAllowLiveUnlock(false);
@@ -195,6 +201,95 @@ export default function Settings() {
           </svg>
           <span>切换守卫已生效 — {guardReason}</span>
         </div>
+      )}
+
+      {/* ── Live-trading blockage explanation ── */}
+      {((!controlPlaneFailed && controlPlane) || (!runtimeFailed && runtime)) && (
+        (() => {
+          const blockers: { severity: 'danger' | 'warning'; label: string; message: string }[] = [];
+
+          // Transition guard blocking live_small_auto
+          if (!controlPlaneFailed && controlPlane) {
+            const tg = controlPlane.transition_guard_to_live_small_auto;
+            if (tg.startsWith('blocked:')) {
+              const reason = tg.replace('blocked: ', '');
+              const labelMap: Record<string, string> = {
+                lock_active: '真实交易锁已启用',
+                not_paper_auto: '当前非纸面自动模式',
+                not_live_shadow: '未经过影子模式验证',
+                equity_too_low: '权益低于最低门槛',
+                risk_state_blocking: '风险状态阻止切换',
+                unreachable: '后端不可达',
+              };
+              const matchedKey = Object.keys(labelMap).find((k) => reason.includes(k));
+              const label = matchedKey ? labelMap[matchedKey] : '模式切换阻断';
+              blockers.push({
+                severity: 'danger',
+                label,
+                message: `无法切换至 live_small_auto：${reason}`,
+              });
+            }
+
+            // Lock active
+            if (controlPlane.lock_enabled) {
+              blockers.push({
+                severity: 'danger',
+                label: '真实交易锁',
+                message: controlPlane.lock_reason
+                  ? `已启用（原因：${controlPlane.lock_reason}），真实下单被阻止`
+                  : '已启用，真实下单被阻止',
+              });
+            }
+          }
+
+          // Runtime-level blockers
+          if (!runtimeFailed && runtime) {
+            if (runtime.heartbeat_stale_alerting) {
+              blockers.push({
+                severity: 'danger',
+                label: '心跳异常',
+                message: runtime.last_heartbeat_time
+                  ? `心跳已过期（最后心跳 ${fmtTime(runtime.last_heartbeat_time)}），交易进程可能卡死`
+                  : '心跳已过期，交易进程可能卡死，请重启',
+              });
+            }
+            if (runtime.restart_exhausted_ingestion) {
+              blockers.push({
+                severity: 'danger',
+                label: '行情拉取耗尽',
+                message: '数据源连接失败，请检查网络或 Binance API 限额',
+              });
+            }
+            if (runtime.restart_exhausted_trading) {
+              blockers.push({
+                severity: 'danger',
+                label: '交易线程耗尽',
+                message: '交易所 API 连接失败，请检查凭据或网络',
+              });
+            }
+            if (runtime.reconciliation?.status === 'global_pause_recommended') {
+              blockers.push({
+                severity: 'danger',
+                label: '对账建议暂停',
+                message: runtime.reconciliation.diff_summary || '对账发现严重不一致，建议暂停所有交易',
+              });
+            }
+          }
+
+          if (blockers.length === 0) return null;
+          return (
+            <div className="settings-section">
+              <div className="settings-title">实盘阻断说明</div>
+              {blockers.map((b) => (
+                <div key={`${b.severity}-${b.label}`} className={`reminder-row reminder-${b.severity}`}>
+                  <span className={`reminder-dot reminder-dot-${b.severity}`} />
+                  <span className="reminder-label">[{b.label}]</span>
+                  <span className="reminder-message">{b.message}</span>
+                </div>
+              ))}
+            </div>
+          );
+        })()
       )}
 
       {/* ── Current Risk Reminders (read-only, derived from runtime/control-plane) ── */}
@@ -299,27 +394,13 @@ export default function Settings() {
           <span className={`row-value ${
             runtimeFailed || !runtime?.reconciliation
               ? ''
-              : runtime.reconciliation.status === 'ok'
-              ? ''
-              : runtime.reconciliation.status === 'global_pause_recommended'
-              ? 'negative'
-              : runtime.reconciliation.status === 'balance_mismatch' || runtime.reconciliation.status === 'position_mismatch'
+              : runtime.reconciliation.status !== 'ok' && runtime.reconciliation.status !== 'unavailable'
               ? 'negative'
               : ''
           }`}>
             {runtimeFailed || !runtime?.reconciliation
               ? '—'
-              : runtime.reconciliation.status === 'ok'
-              ? '正常'
-              : runtime.reconciliation.status === 'balance_mismatch'
-              ? '余额差异'
-              : runtime.reconciliation.status === 'position_mismatch'
-              ? '持仓差异'
-              : runtime.reconciliation.status === 'global_pause_recommended'
-              ? '建议全局暂停'
-              : runtime.reconciliation.status === 'unavailable'
-              ? '不可用'
-              : runtime.reconciliation.status ?? '—'}
+              : getReconciliationLabel(runtime.reconciliation.status) ?? '—'}
           </span>
         </div>
         <div className="settings-row">
@@ -434,6 +515,18 @@ export default function Settings() {
               setModeDirty(true);
             }}
           />
+          {modeValue === 'live_small_auto' && (
+            <input
+              className="control-input"
+              type="text"
+              placeholder="交易对（例如 BTCUSDT）"
+              value={liveSymbol}
+              onChange={(e) => {
+                setLiveSymbol(e.target.value.toUpperCase());
+                setModeDirty(true);
+              }}
+            />
+          )}
           {modeFeedback && (
             <FeedbackBanner success={modeFeedback.success} message={modeFeedback.message} />
           )}

@@ -93,6 +93,13 @@ class FakeEventsRepo:
         component: str,
         message: str,
         context: dict | None = None,
+        trace_id: str | None = None,
+        cycle_id: str | None = None,
+        symbol: str | None = None,
+        side: str | None = None,
+        mode: str | None = None,
+        lifecycle_stage: str | None = None,
+        reason: str | None = None,
     ) -> MagicMock:
         ev = MagicMock()
         ev.id = self._next_id
@@ -102,6 +109,13 @@ class FakeEventsRepo:
         ev.component = component
         ev.message = message
         ev.context_json = context or {}
+        ev.trace_id = trace_id
+        ev.cycle_id = cycle_id
+        ev.symbol = symbol
+        ev.side = side
+        ev.mode = mode
+        ev.lifecycle_stage = lifecycle_stage
+        ev.reason = reason
         self.events.append(ev)
         return ev
 
@@ -415,22 +429,33 @@ def test_successful_execution_with_persisted_order_and_fill():
     assert persisted_order.symbol == "BTCUSDT"
     assert persisted_fill.symbol == "BTCUSDT"
 
-    # Verify event sequence
+    # Verify key events are present in order
     event_types = [ev.event_type for ev in events_repo.events]
-    assert event_types == [
-        "cycle_started",
-        "signal_generated",
-        "order_executed",
-        "cycle_finished",
-    ]
+    assert "cycle_started" in event_types
+    assert "signal_generated" in event_types
+    assert "order_executed" in event_types
+    assert "cycle_finished" in event_types
+    # Lifecycle events should appear in order
+    cycle_started_idx = event_types.index("cycle_started")
+    signal_idx = event_types.index("signal_generated")
+    order_idx = event_types.index("order_executed")
+    finished_idx = event_types.index("cycle_finished")
+    assert cycle_started_idx < signal_idx < order_idx < finished_idx
 
     # Verify ai_decision is stored in a cycle event
     signal_ev = next(ev for ev in events_repo.events if ev.event_type == "signal_generated")
     assert signal_ev.context_json["symbol"] == "BTCUSDT"
 
-    executed_ev = next(ev for ev in events_repo.events if ev.event_type == "order_executed")
-    assert executed_ev.context_json["symbol"] == "BTCUSDT"
-    assert executed_ev.context_json["side"] == "BUY"
+    # Both lifecycle (with lifecycle_stage) and non-lifecycle order_executed events may exist.
+    # Check any of them for symbol/side via event fields or context.
+    executed_ev = next(
+        (ev for ev in events_repo.events
+         if ev.event_type == "order_executed"
+         and (ev.context_json.get("symbol") == "BTCUSDT" or ev.symbol == "BTCUSDT")),
+        None,
+    )
+    assert executed_ev is not None, "No order_executed event with symbol=BTCUSDT found"
+    assert executed_ev.side == "BUY" or executed_ev.context_json.get("side") == "BUY"
 
 
 def test_position_size_rejection_stops_before_execution():
@@ -619,8 +644,9 @@ def test_live_shadow_route_records_shadow_and_does_not_execute_paper_order():
     event_types = [ev.event_type for ev in events_repo.events]
     assert "cycle_started" in event_types
     assert "signal_generated" in event_types
-    assert "shadow_execution_recorded" in event_types
+    # Live shadow route has no paper order execution
     assert "order_executed" not in event_types
+    assert "shadow_execution_recorded" in event_types
     assert "cycle_finished" in event_types
 
     # The cycle_finished event should have shadow_recorded status
@@ -1062,3 +1088,162 @@ def test_exit_engine_none_skips_exit_scan():
     assert result.status == "executed"
     assert result.order_executed is True
     assert result.exit_executed is False
+
+
+# ── Lifecycle chain tests ───────────────────────────────────────────────────────
+
+
+def test_lifecycle_success_chain_carries_trace_and_cycle_ids():
+    """Successful execution produces a chain with consistent trace_id and cycle_id."""
+    input_data = make_input()
+
+    fake_session = MagicMock()
+    fake_repo = MagicMock()
+    fake_repo.list_recent.return_value = []
+    fake_session.__enter__ = MagicMock(return_value=fake_session)
+    fake_session.__exit__ = MagicMock(return_value=None)
+
+    def factory() -> MagicMock:
+        return fake_session
+
+    ai_scorer = MagicMock()
+    ai_scorer.score_candidate.return_value = make_ai_pass(ai_score=85)
+
+    exec_order = PaperOrder(
+        symbol="BTCUSDT",
+        side="BUY",
+        order_type="MARKET",
+        requested_notional_usdt=Decimal("100"),
+        status="FILLED",
+        created_at=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
+    )
+    exec_fill = PaperFill(
+        symbol="BTCUSDT",
+        side="BUY",
+        price=Decimal("100000"),
+        qty=Decimal("0.001"),
+        fee_usdt=Decimal("0.25"),
+        slippage_bps=Decimal("0"),
+        filled_at=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
+    )
+    from trading.execution.paper_executor import PaperExecutionResult
+    exec_result = PaperExecutionResult(
+        approved=True,
+        order=exec_order,
+        fill=exec_fill,
+        reject_reasons=[],
+    )
+    executor = MagicMock()
+    executor.execute_market_buy.return_value = exec_result
+    executor.slippage_bps = Decimal("0")
+
+    events_repo = FakeEventsRepo()
+    exec_repo = FakeExecRepo()
+
+    with patch(
+        "trading.runtime.paper_cycle.CandlesRepository",
+        return_value=fake_repo,
+    ):
+        with patch(
+            "trading.runtime.paper_cycle.generate_momentum_candidate",
+            return_value=make_candidate(),
+        ):
+            with _paper_auto_patches():
+                result = run_paper_cycle(
+                    input_data=input_data,
+                    events_repo=events_repo,
+                    exec_repo=exec_repo,
+                    executor=executor,
+                    ai_scorer=ai_scorer,
+                    session_factory=factory,
+                )
+
+    assert result.trace_id is not None
+    assert result.cycle_id is not None
+    assert result.trace_id.startswith("BTCUSDT-") or len(result.trace_id) == 16
+
+    # All events share the same trace_id
+    for ev in events_repo.events:
+        assert ev.trace_id == result.trace_id, f"Event {ev.event_type} missing trace_id"
+
+    # All events share the same cycle_id
+    for ev in events_repo.events:
+        assert ev.cycle_id == result.cycle_id, f"Event {ev.event_type} missing cycle_id"
+
+    # All events carry symbol
+    for ev in events_repo.events:
+        assert ev.symbol == "BTCUSDT", f"Event {ev.event_type} missing symbol"
+
+    # Lifecycle stages are populated on lifecycle events
+    lifecycle_stages = [ev.lifecycle_stage for ev in events_repo.events if ev.lifecycle_stage]
+    assert "cycle_started" in lifecycle_stages
+    assert "signal_received" in lifecycle_stages
+    assert "risk_checked" in lifecycle_stages
+    assert "position_sized" in lifecycle_stages
+    assert "execution_attempted" in lifecycle_stages
+    assert "execution_result" in lifecycle_stages
+
+
+def test_lifecycle_failure_chain_preserves_root_cause():
+    """Failure path (AI rejected) preserves root cause in lifecycle reason field."""
+    input_data = make_input()
+
+    fake_session = MagicMock()
+    fake_repo = MagicMock()
+    fake_repo.list_recent.return_value = []
+    fake_session.__enter__ = MagicMock(return_value=fake_session)
+    fake_session.__exit__ = MagicMock(return_value=None)
+
+    def factory() -> MagicMock:
+        return fake_session
+
+    ai_scorer = MagicMock()
+    ai_scorer.score_candidate.return_value = make_ai_reject(score=0, hint="reject")
+    executor = MagicMock()
+    events_repo = FakeEventsRepo()
+    exec_repo = FakeExecRepo()
+
+    with patch(
+        "trading.runtime.paper_cycle.CandlesRepository",
+        return_value=fake_repo,
+    ):
+        with patch(
+            "trading.runtime.paper_cycle.generate_momentum_candidate",
+            return_value=make_candidate(),
+        ):
+            with _paper_auto_patches():
+                result = run_paper_cycle(
+                    input_data=input_data,
+                    events_repo=events_repo,
+                    exec_repo=exec_repo,
+                    executor=executor,
+                    ai_scorer=ai_scorer,
+                    session_factory=factory,
+                )
+
+    assert result.status == "ai_rejected"
+    assert result.trace_id is not None
+    assert result.cycle_id is not None
+
+    # All events share the same trace_id and cycle_id
+    for ev in events_repo.events:
+        assert ev.trace_id == result.trace_id
+        assert ev.cycle_id == result.cycle_id
+        assert ev.symbol == "BTCUSDT"
+
+    # Root cause is "ai_rejected" in lifecycle reason
+    risk_rejected_events = [ev for ev in events_repo.events if ev.event_type == "risk_rejected"]
+    assert len(risk_rejected_events) >= 1
+    for ev in risk_rejected_events:
+        assert ev.reason == "ai_rejected", (
+            f"risk_rejected event should have reason='ai_rejected', got {ev.reason}"
+        )
+
+    # lifecycle_stage should be "risk_checked" on the failure path
+    risk_checked_stages = [
+        ev for ev in events_repo.events if ev.lifecycle_stage == "risk_checked"
+    ]
+    assert len(risk_checked_stages) >= 1
+
+    # CycleResult reject_reasons contains ai_rejected root cause
+    assert any("ai_rejected" in r for r in result.reject_reasons)

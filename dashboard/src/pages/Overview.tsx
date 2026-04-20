@@ -14,7 +14,7 @@ import {
   type EventsSummary,
   type RuntimeStatus,
 } from '../api/client';
-import { riskDot, severityBadge, fmtNum, fmtPct, fmtTime, SafetyBanner, OfflineNotice } from '../lib';
+import { riskDot, severityBadge, fmtNum, fmtPct, fmtTime, SafetyBanner, OfflineNotice, DegradedNotice, getReconciliationDotClass, getReconciliationLabel } from '../lib';
 
 // ── Placeholder data ──────────────────────────────────────────────────────────
 
@@ -107,13 +107,7 @@ function StatusStrip({
   const displayRisk = riskFailed ? PLACEHOLDER_RISK : risk;
   const reconciliation = runtime?.reconciliation;
   const reconStatus = reconciliation?.status ?? 'ok';
-  const reconDotClass = reconStatus === 'ok'
-    ? 'dot-normal'
-    : reconStatus === 'balance_mismatch' || reconStatus === 'position_mismatch'
-    ? 'dot-degraded'
-    : reconStatus === 'global_pause_recommended'
-    ? 'dot-stale'
-    : 'dot-disabled';
+  const reconDotClass = getReconciliationDotClass(reconStatus);
 
   return (
     <div className="status-strip">
@@ -382,6 +376,122 @@ function ExecutionStatusBanner({ runtime }: { runtime: RuntimeStatus | null }) {
   );
 }
 
+type BlockReason = { severity: 'danger' | 'warning'; label: string; reason: string };
+
+function WhyBlockedPanel({
+  runtime,
+  risk,
+  riskFailed,
+}: {
+  runtime: RuntimeStatus | null;
+  risk: { risk_state: string; reason?: string } | null;
+  riskFailed: boolean;
+}) {
+  if (!runtime) return null;
+
+  const reasons: BlockReason[] = [];
+
+  // Guard / transition blocked
+  if (runtime.mode_transition_guard?.startsWith('blocked:')) {
+    const reason = runtime.mode_transition_guard.replace('blocked: ', '');
+    reasons.push({
+      severity: 'danger',
+      label: '模式切换阻断',
+      reason,
+    });
+  }
+
+  // Live lock active
+  if (runtime.live_trading_lock_enabled) {
+    reasons.push({
+      severity: 'danger',
+      label: '真实交易锁',
+      reason: '真实下单被阻止，请前往 设置 > 执行控制 解除锁定',
+    });
+  }
+
+  // Heartbeat stale
+  if (runtime.heartbeat_stale_alerting) {
+    const hint = runtime.last_heartbeat_time
+      ? `最后心跳 ${fmtTime(runtime.last_heartbeat_time)}`
+      : '心跳已丢失';
+    reasons.push({
+      severity: 'danger',
+      label: '心跳异常',
+      reason: `${hint}，交易进程可能已卡死，请重启`,
+    });
+  }
+
+  // Restart exhausted
+  if (runtime.restart_exhausted_ingestion) {
+    reasons.push({
+      severity: 'danger',
+      label: '数据拉取耗尽',
+      reason: '行情数据源连接失败，请检查网络或 API 限额',
+    });
+  }
+  if (runtime.restart_exhausted_trading) {
+    reasons.push({
+      severity: 'danger',
+      label: '交易线程耗尽',
+      reason: '交易所 API 连接失败，请检查凭据或网络',
+    });
+  }
+
+  // Risk breaker
+  if (!riskFailed && risk) {
+    if (risk.risk_state === 'global_pause') {
+      reasons.push({
+        severity: 'danger',
+        label: '风险熔断',
+        reason: '全局暂停交易（权益/风险触发），请查看风险面板',
+      });
+    } else if (risk.risk_state === 'no_new_positions') {
+      reasons.push({
+        severity: 'warning',
+        label: '风险熔断',
+        reason: risk.reason || '禁止开新仓位，请查看风险面板',
+      });
+    } else if (risk.risk_state === 'degraded') {
+      reasons.push({
+        severity: 'warning',
+        label: '风险降级',
+        reason: risk.reason || '风控降级中，请查看风险面板',
+      });
+    }
+  } else if (riskFailed) {
+    reasons.push({
+      severity: 'warning',
+      label: '风险状态不可用',
+      reason: '无法获取风控状态，请检查后端连通性',
+    });
+  }
+
+  // Reconciliation global pause
+  if (runtime.reconciliation?.status === 'global_pause_recommended') {
+    reasons.push({
+      severity: 'danger',
+      label: '对账建议暂停',
+      reason: runtime.reconciliation.diff_summary || '对账发现严重差异，建议暂停所有交易',
+    });
+  }
+
+  if (reasons.length === 0) return null;
+
+  return (
+    <div className="settings-section" style={{ marginBottom: '1rem' }}>
+      <div className="settings-title">实盘阻断因素</div>
+      {reasons.map((r, i) => (
+        <div key={i} className={`reminder-row reminder-${r.severity}`}>
+          <span className={`reminder-dot reminder-dot-${r.severity}`} />
+          <span className="reminder-label">[{r.label}]</span>
+          <span className="reminder-message">{r.reason}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── Status helpers ────────────────────────────────────────────────────────────
 
 /** Dot class for the heartbeat card — also reflects heartbeat_stale_alerting. */
@@ -422,6 +532,10 @@ function RuntimeSection({
 
   const hbDot = heartbeatDotClass(display.heartbeat_stale_alerting, display.supervisor_alive);
   const hbInfo = heartbeatLabel(display.heartbeat_stale_alerting, display.last_heartbeat_time);
+
+  const reconStatus = display.reconciliation?.status ?? 'ok';
+  const reconLabel = getReconciliationLabel(reconStatus);
+  const reconIsNegative = reconStatus !== 'ok' && reconStatus !== 'unavailable';
 
   return (
     <div className="section">
@@ -549,18 +663,8 @@ function RuntimeSection({
         </div>
         <div className="metric-card">
           <div className="metric-label">对账状态</div>
-          <div className={`metric-value ${
-            (display.reconciliation?.status ?? 'ok') !== 'ok' &&
-            (display.reconciliation?.status ?? 'ok') !== 'unavailable'
-              ? 'negative'
-              : (runtime ? '' : 'placeholder')
-          }`}>
-            {(display.reconciliation?.status ?? 'ok') === 'ok' ? '正常'
-              : (display.reconciliation?.status ?? 'ok') === 'balance_mismatch' ? '余额差异'
-              : (display.reconciliation?.status ?? 'ok') === 'position_mismatch' ? '持仓差异'
-              : (display.reconciliation?.status ?? 'ok') === 'global_pause_recommended' ? '建议暂停'
-              : (display.reconciliation?.status ?? 'ok') === 'unavailable' ? '不可用'
-              : (display.reconciliation?.status ?? '—')}
+          <div className={`metric-value ${reconIsNegative && runtime ? 'negative' : (runtime ? '' : 'placeholder')}`}>
+            {reconLabel}
           </div>
         </div>
         <div className="metric-card">
@@ -604,6 +708,14 @@ export default function Overview() {
 
   const hasApiFailure = Object.values(failures).some(Boolean);
 
+  const failedPanelLabels: string[] = [];
+  if (failures.health)   failedPanelLabels.push('系统信息');
+  if (failures.risk)     failedPanelLabels.push('风险');
+  if (failures.portfolio) failedPanelLabels.push('账户');
+  if (failures.orders)   failedPanelLabels.push('订单');
+  if (failures.events)   failedPanelLabels.push('事件');
+  if (failures.runtime)  failedPanelLabels.push('运行状态');
+
   const fetchAll = useCallback(() => {
     getHealth()
       .then((data) => { setHealth(data); setFailures((f) => ({ ...f, health: false })); })
@@ -642,7 +754,17 @@ export default function Overview() {
     <div className="page">
       <SafetyBanner />
 
-      {hasApiFailure && <OfflineNotice />}
+      {hasApiFailure && (
+        failedPanelLabels.length > 0
+          ? <DegradedNotice failures={failedPanelLabels} />
+          : <OfflineNotice />
+      )}
+
+      <WhyBlockedPanel
+        runtime={failures.runtime ? null : runtime}
+        risk={failures.risk ? null : risk}
+        riskFailed={failures.risk}
+      />
 
       <StatusStrip
         health={failures.health ? null : health}

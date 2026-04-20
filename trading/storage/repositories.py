@@ -24,6 +24,13 @@ class EventsRepository:
         component: str,
         message: str,
         context: dict[str, Any] | None = None,
+        trace_id: str | None = None,
+        cycle_id: str | None = None,
+        symbol: str | None = None,
+        side: str | None = None,
+        mode: str | None = None,
+        lifecycle_stage: str | None = None,
+        reason: str | None = None,
     ) -> Event:
         event = Event(
             event_type=event_type,
@@ -31,6 +38,13 @@ class EventsRepository:
             component=component,
             message=message,
             context_json=context or {},
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            symbol=symbol,
+            side=side,
+            mode=mode,
+            lifecycle_stage=lifecycle_stage,
+            reason=reason,
         )
         self.session.add(event)
         self.session.commit()
@@ -43,6 +57,7 @@ class EventsRepository:
         severity: str | None = None,
         component: str | None = None,
         event_type: str | None = None,
+        lifecycle_stage: str | None = None,
     ) -> list[Event]:
         statement = select(Event)
         if severity is not None:
@@ -51,6 +66,8 @@ class EventsRepository:
             statement = statement.where(Event.component == component)
         if event_type is not None:
             statement = statement.where(Event.event_type == event_type)
+        if lifecycle_stage is not None:
+            statement = statement.where(Event.lifecycle_stage == lifecycle_stage)
         statement = statement.order_by(desc(Event.id)).limit(limit)
         return list(self.session.scalars(statement))
 
@@ -63,6 +80,26 @@ class EventsRepository:
             .limit(1)
         )
         return self.session.scalar(statement)
+
+    def list_by_trace_id(self, trace_id: str, limit: int = 100) -> list[Event]:
+        """Return all events for a given trace_id, ordered by id ascending."""
+        statement = (
+            select(Event)
+            .where(Event.trace_id == trace_id)
+            .order_by(asc(Event.id))
+            .limit(limit)
+        )
+        return list(self.session.scalars(statement))
+
+    def list_by_cycle_id(self, cycle_id: str, limit: int = 50) -> list[Event]:
+        """Return all events for a given cycle_id, ordered by id ascending."""
+        statement = (
+            select(Event)
+            .where(Event.cycle_id == cycle_id)
+            .order_by(asc(Event.id))
+            .limit(limit)
+        )
+        return list(self.session.scalars(statement))
 
 
 class CandlesRepository:

@@ -25,6 +25,14 @@ class Event(Base):
         default=lambda: datetime.now(UTC),
         index=True,
     )
+    # Lifecycle correlation fields
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    cycle_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    symbol: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    side: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    mode: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    lifecycle_stage: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
 
 class Candle(Base):

@@ -6,6 +6,7 @@ market data -> features -> strategy candidate -> AI score
 -> persistence -> runtime events.
 """
 
+import uuid
 from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
@@ -38,6 +39,20 @@ from trading.strategies.active.multi_timeframe_momentum import (
 )
 from trading.strategies.exits import ExitEngine, ExitSignal
 
+# ── Lifecycle stages ──────────────────────────────────────────────────────────
+
+LIFECYCLE_STAGES = (
+    "cycle_started",
+    "signal_received",
+    "risk_checked",
+    "position_sized",
+    "execution_attempted",
+    "execution_result",
+    "no_execution",
+    "exit_evaluated",
+)
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
@@ -59,7 +74,40 @@ def _orm_candle_to_data(candle: Any):
     )
 
 
-# ── Models ────────────────────────────────────────────────────────────────────
+def _record_lifecycle(
+    events_repo: EventsRepository,
+    trace_id: str,
+    cycle_id: str,
+    symbol: str,
+    side: str | None,
+    mode: str,
+    stage: str,
+    event_type: str,
+    severity: str,
+    component: str,
+    message: str,
+    context: dict[str, Any] | None = None,
+    reason: str | None = None,
+) -> int:
+    """Record a lifecycle event and return its id."""
+    ev = events_repo.record_event(
+        event_type=event_type,
+        severity=severity,
+        component=component,
+        message=message,
+        context=context,
+        trace_id=trace_id,
+        cycle_id=cycle_id,
+        symbol=symbol,
+        side=side,
+        mode=mode,
+        lifecycle_stage=stage,
+        reason=reason,
+    )
+    return ev.id
+
+
+# ── Models ──────────────────────────────────────────────────────────────────────
 
 
 class CycleInput(BaseModel):
@@ -96,9 +144,12 @@ class CycleResult(BaseModel):
     # Exit result
     exit_signal: ExitSignal | None = None
     exit_executed: bool = False
+    # Correlation IDs for audit chain
+    trace_id: str | None = None
+    cycle_id: str | None = None
 
 
-# ── Exit helpers ───────────────────────────────────────────────────────────────
+# ── Exit helpers ────────────────────────────────────────────────────────────────
 
 
 def _run_exit_scan(
@@ -107,6 +158,9 @@ def _run_exit_scan(
     executor: PaperExecutor,
     events_repo: EventsRepository,
     exec_repo: ExecutionRecordsRepository,
+    trace_id: str,
+    cycle_id: str,
+    mode: str,
 ) -> tuple[ExitSignal | None, bool, list[int]]:
     """Scan for and optionally execute exit signals on the current position.
 
@@ -122,6 +176,7 @@ def _run_exit_scan(
     if market_price is None:
         return None, False, event_ids
 
+    # ── exit_evaluated (signal found) ─────────────────────────────────────
     exit_signal = exit_engine.evaluate(
         symbol=input_data.symbol,
         position_qty=position.qty,
@@ -133,9 +188,26 @@ def _run_exit_scan(
     )
 
     if exit_signal is None:
+        _record_lifecycle(
+            events_repo=events_repo,
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            symbol=input_data.symbol,
+            side="SELL",
+            mode=mode,
+            stage="exit_evaluated",
+            event_type="exit_evaluated",
+            severity="info",
+            component="paper_cycle",
+            message=f"Exit scan for {input_data.symbol}: no signal.",
+            context={
+                "position_qty": str(position.qty),
+                "market_price": str(market_price),
+            },
+        )
         return None, False, event_ids
 
-    # Record exit_signal_generated event
+    # Record exit_signal_generated event with full lifecycle fields
     exit_gen_ev = events_repo.record_event(
         event_type="exit_signal_generated",
         severity="info",
@@ -152,6 +224,13 @@ def _run_exit_scan(
             "confidence": str(exit_signal.confidence),
             "message": exit_signal.message,
         },
+        trace_id=trace_id,
+        cycle_id=cycle_id,
+        symbol=input_data.symbol,
+        side="SELL",
+        mode=mode,
+        lifecycle_stage="exit_evaluated",
+        reason=exit_signal.reason.value,
     )
     event_ids.append(exit_gen_ev.id)
 
@@ -186,6 +265,13 @@ def _run_exit_scan(
                 "reason": exit_signal.reason.value,
                 "notional": str(exec_result.order.requested_notional_usdt),
             },
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            symbol=input_data.symbol,
+            side="SELL",
+            mode=mode,
+            lifecycle_stage="execution_result",
+            reason=exit_signal.reason.value,
         )
         event_ids.append(executed_ev.id)
 
@@ -208,16 +294,23 @@ def run_paper_cycle(
     """Run a full paper trading cycle for one symbol.
 
     Pipeline:
-        0. exit scan (if current_position set and exit_engine provided)
+        0. cycle_started + exit scan (if current_position set and exit_engine provided)
         1. candles -> features
         2. features -> strategy candidate
-        3. candidate -> AI score  (fail-closed)
-        4. pre-trade risk check
-        5. position sizing
-        6. paper execution
-        7. persist order/fill
-        8. record events
+        3. signal_received -> AI score  (fail-closed)
+        4. risk_checked (AI reject path)
+        5. pre-trade risk check
+        6. risk_checked (risk reject path) -> position_sized
+        7. execution_attempted (gate check) -> execution_result
+        8. persist order/fill
+        9. record events
     """
+
+    # Generate correlation IDs at cycle start
+    trace_id = str(uuid.uuid4().hex[:16])
+    cycle_id = f"{input_data.symbol}-{input_data.now.strftime('%Y%m%d%H%M%S')}"
+    mode = get_trade_mode(session_factory)
+    side: str | None = None
 
     event_ids: list[int] = []
     reject_reasons: list[str] = []
@@ -228,7 +321,7 @@ def run_paper_cycle(
     exit_signal: ExitSignal | None = None
     exit_executed = False
 
-    # ── Stage 0: cycle_started ────────────────────────────────────────────────
+    # ── Stage 0: cycle_started (lifecycle_stage=cycle_started) ─────────────────
     started = events_repo.record_event(
         event_type="cycle_started",
         severity="info",
@@ -238,7 +331,15 @@ def run_paper_cycle(
             "symbol": input_data.symbol,
             "account_equity": str(input_data.account_equity),
             "day_start_equity": str(input_data.day_start_equity),
+            "kill_switch": input_data.kill_switch_enabled,
         },
+        trace_id=trace_id,
+        cycle_id=cycle_id,
+        symbol=input_data.symbol,
+        side=None,
+        mode=mode,
+        lifecycle_stage="cycle_started",
+        reason=None,
     )
     event_ids.append(started.id)
 
@@ -254,6 +355,9 @@ def run_paper_cycle(
             executor=executor,
             events_repo=events_repo,
             exec_repo=exec_repo,
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            mode=mode,
         )
         event_ids.extend(exit_event_ids)
 
@@ -269,6 +373,13 @@ def run_paper_cycle(
                     "symbol": input_data.symbol,
                     "exit_reason": exit_signal.reason.value if exit_signal else None,
                 },
+                trace_id=trace_id,
+                cycle_id=cycle_id,
+                symbol=input_data.symbol,
+                side="SELL",
+                mode=mode,
+                lifecycle_stage="execution_result",
+                reason=exit_signal.reason.value if exit_signal else "exit_executed",
             )
             event_ids.append(finished.id)
             return CycleResult(
@@ -282,6 +393,8 @@ def run_paper_cycle(
                 event_ids=event_ids,
                 exit_signal=exit_signal,
                 exit_executed=True,
+                trace_id=trace_id,
+                cycle_id=cycle_id,
             )
 
     # ── Stage 1: fetch candles and build features ───────────────────────────
@@ -311,6 +424,13 @@ def run_paper_cycle(
             component="paper_cycle",
             message=f"No signal for {input_data.symbol}",
             context={"status": "no_signal"},
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            symbol=input_data.symbol,
+            side=None,
+            mode=mode,
+            lifecycle_stage="signal_received",
+            reason="no_candidate",
         )
         event_ids.append(finished.id)
         return CycleResult(
@@ -324,11 +444,14 @@ def run_paper_cycle(
             event_ids=event_ids,
             exit_signal=exit_signal,
             exit_executed=exit_executed,
+            trace_id=trace_id,
+            cycle_id=cycle_id,
         )
 
     candidate_present = True
+    side = candidate.side
 
-    # ── Stage 3: signal_generated event ─────────────────────────────────────
+    # ── Stage 3a: signal_received (lifecycle stage) ──────────────────────────
     signal_ev = events_repo.record_event(
         event_type="signal_generated",
         severity="info",
@@ -340,10 +463,17 @@ def run_paper_cycle(
             "entry_reference": str(candidate.entry_reference),
             "rule_confidence": str(candidate.rule_confidence),
         },
+        trace_id=trace_id,
+        cycle_id=cycle_id,
+        symbol=input_data.symbol,
+        side=candidate.side,
+        mode=mode,
+        lifecycle_stage="signal_received",
+        reason=None,
     )
     event_ids.append(signal_ev.id)
 
-    # ── Stage 4: AI scoring (fail-closed) ───────────────────────────────────
+    # ── Stage 3b: AI scoring (fail-closed) ───────────────────────────────────
     latest_15m: CandleFeatures | None = features_15m[-1] if features_15m else None
 
     ai_result = ai_scorer.score_candidate(
@@ -367,12 +497,20 @@ def run_paper_cycle(
 
     if ai_result.decision_hint == "reject" or ai_result.ai_score < 50:
         reject_reasons = [f"ai_rejected(score={ai_result.ai_score})", *ai_result.risk_flags]
+
         events_repo.record_event(
             event_type="risk_rejected",
             severity="warning",
             component="paper_cycle",
             message=f"AI rejected {input_data.symbol}: {ai_result.explanation}",
             context={"ai_decision": ai_decision, "reject_reasons": reject_reasons},
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            symbol=input_data.symbol,
+            side=side,
+            mode=mode,
+            lifecycle_stage="risk_checked",
+            reason="ai_rejected",
         )
         finished = events_repo.record_event(
             event_type="cycle_finished",
@@ -380,6 +518,13 @@ def run_paper_cycle(
             component="paper_cycle",
             message=f"Cycle rejected by AI for {input_data.symbol}",
             context={"status": "ai_rejected", "reject_reasons": reject_reasons},
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            symbol=input_data.symbol,
+            side=side,
+            mode=mode,
+            lifecycle_stage="risk_checked",
+            reason="ai_rejected",
         )
         event_ids.append(finished.id)
         return CycleResult(
@@ -393,9 +538,32 @@ def run_paper_cycle(
             event_ids=event_ids,
             exit_signal=exit_signal,
             exit_executed=exit_executed,
+            trace_id=trace_id,
+            cycle_id=cycle_id,
         )
 
-    # ── Stage 5: pre-trade risk ─────────────────────────────────────────────
+    # AI passed — emit risk_checked (approved)
+    _record_lifecycle(
+        events_repo=events_repo,
+        trace_id=trace_id,
+        cycle_id=cycle_id,
+        symbol=input_data.symbol,
+        side=side,
+        mode=mode,
+        stage="risk_checked",
+        event_type="risk_checked",
+        severity="info",
+        component="paper_cycle",
+        message=f"AI approved {input_data.symbol} (score={ai_result.ai_score})",
+        context={
+            "ai_score": ai_result.ai_score,
+            "decision_hint": ai_result.decision_hint,
+            "ai_explanation": ai_result.explanation,
+        },
+        reason="ai_approved",
+    )
+
+    # ── Stage 4: pre-trade risk ─────────────────────────────────────────────
     risk_profile = select_risk_profile(input_data.account_equity)
     snapshot = PortfolioRiskSnapshot(
         account_equity=input_data.account_equity,
@@ -424,6 +592,13 @@ def run_paper_cycle(
             component="paper_cycle",
             message=f"Pre-trade risk rejected {input_data.symbol}: {pre_trade.reject_reasons}",
             context={"risk_state": risk_state, "reject_reasons": reject_reasons},
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            symbol=input_data.symbol,
+            side=side,
+            mode=mode,
+            lifecycle_stage="risk_checked",
+            reason="risk_rejected",
         )
         finished = events_repo.record_event(
             event_type="cycle_finished",
@@ -431,6 +606,13 @@ def run_paper_cycle(
             component="paper_cycle",
             message=f"Cycle risk-rejected for {input_data.symbol}",
             context={"status": "risk_rejected", "reject_reasons": reject_reasons},
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            symbol=input_data.symbol,
+            side=side,
+            mode=mode,
+            lifecycle_stage="risk_checked",
+            reason="risk_rejected",
         )
         event_ids.append(finished.id)
         return CycleResult(
@@ -444,9 +626,11 @@ def run_paper_cycle(
             event_ids=event_ids,
             exit_signal=exit_signal,
             exit_executed=exit_executed,
+            trace_id=trace_id,
+            cycle_id=cycle_id,
         )
 
-    # ── Stage 6: position sizing ─────────────────────────────────────────────
+    # ── Stage 5: position sizing ─────────────────────────────────────────────
     market_price = input_data.market_prices.get(input_data.symbol)
     if market_price is None:
         reject_reasons = ["missing_market_price"]
@@ -456,6 +640,13 @@ def run_paper_cycle(
             component="paper_cycle",
             message=f"No market price for {input_data.symbol}",
             context={"status": "size_rejected", "reject_reasons": reject_reasons},
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            symbol=input_data.symbol,
+            side=side,
+            mode=mode,
+            lifecycle_stage="position_sized",
+            reason="missing_market_price",
         )
         event_ids.append(finished.id)
         return CycleResult(
@@ -469,6 +660,8 @@ def run_paper_cycle(
             event_ids=event_ids,
             exit_signal=exit_signal,
             exit_executed=exit_executed,
+            trace_id=trace_id,
+            cycle_id=cycle_id,
         )
 
     size_result: PositionSizeResult = calculate_position_size(
@@ -487,6 +680,13 @@ def run_paper_cycle(
             component="paper_cycle",
             message=f"Position sizing rejected {input_data.symbol}: {size_result.reject_reasons}",
             context={"reject_reasons": reject_reasons},
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            symbol=input_data.symbol,
+            side=side,
+            mode=mode,
+            lifecycle_stage="position_sized",
+            reason="position_size_rejected",
         )
         finished = events_repo.record_event(
             event_type="cycle_finished",
@@ -494,6 +694,13 @@ def run_paper_cycle(
             component="paper_cycle",
             message=f"Cycle size-rejected for {input_data.symbol}",
             context={"status": "size_rejected", "reject_reasons": reject_reasons},
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            symbol=input_data.symbol,
+            side=side,
+            mode=mode,
+            lifecycle_stage="position_sized",
+            reason="position_size_rejected",
         )
         event_ids.append(finished.id)
         return CycleResult(
@@ -507,11 +714,32 @@ def run_paper_cycle(
             event_ids=event_ids,
             exit_signal=exit_signal,
             exit_executed=exit_executed,
+            trace_id=trace_id,
+            cycle_id=cycle_id,
         )
 
-    # ── Stage 7: execution gate ──────────────────────────────────────────────
+    # Position sizing approved — emit position_sized lifecycle event
+    _record_lifecycle(
+        events_repo=events_repo,
+        trace_id=trace_id,
+        cycle_id=cycle_id,
+        symbol=input_data.symbol,
+        side=side,
+        mode=mode,
+        stage="position_sized",
+        event_type="position_sized",
+        severity="info",
+        component="paper_cycle",
+        message=f"Position sized for {input_data.symbol}: {size_result.notional_usdt} USDT",
+        context={
+            "notional_usdt": str(size_result.notional_usdt),
+            "max_loss_usdt": str(size_result.max_loss_usdt),
+        },
+        reason=None,
+    )
+
+    # ── Stage 6: execution gate ──────────────────────────────────────────────
     gate = ExecutionGate()
-    mode = get_trade_mode(session_factory)
     lock = get_live_trading_lock(session_factory)
     gate_decision = gate.decide(
         mode=mode,
@@ -519,6 +747,27 @@ def run_paper_cycle(
         risk_approved=pre_trade.approved,
         kill_switch_enabled=input_data.kill_switch_enabled,
         candidate_symbol=candidate.symbol,
+    )
+
+    # Emit execution_attempted lifecycle event (gate decision made)
+    _record_lifecycle(
+        events_repo=events_repo,
+        trace_id=trace_id,
+        cycle_id=cycle_id,
+        symbol=input_data.symbol,
+        side=side,
+        mode=mode,
+        stage="execution_attempted",
+        event_type="execution_attempted",
+        severity="info",
+        component="paper_cycle",
+        message=f"Execution gate decision for {input_data.symbol}: {gate_decision.route}",
+        context={
+            "gate_route": gate_decision.route,
+            "gate_reason": gate_decision.reason,
+            "gate_allowed": gate_decision.allowed,
+        },
+        reason=gate_decision.reason if not gate_decision.allowed else None,
     )
 
     if not gate_decision.allowed:
@@ -533,6 +782,13 @@ def run_paper_cycle(
                 "route": gate_decision.route,
                 "reason": gate_decision.reason,
             },
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            symbol=input_data.symbol,
+            side=side,
+            mode=mode,
+            lifecycle_stage="execution_attempted",
+            reason=f"execution_gate:{gate_decision.reason}",
         )
         finished = events_repo.record_event(
             event_type="cycle_finished",
@@ -540,6 +796,13 @@ def run_paper_cycle(
             component="paper_cycle",
             message=f"Cycle blocked by execution gate for {input_data.symbol}",
             context={"status": "gate_blocked", "reject_reasons": reject_reasons},
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            symbol=input_data.symbol,
+            side=side,
+            mode=mode,
+            lifecycle_stage="execution_attempted",
+            reason=f"execution_gate:{gate_decision.reason}",
         )
         event_ids.append(finished.id)
         return CycleResult(
@@ -553,11 +816,12 @@ def run_paper_cycle(
             event_ids=event_ids,
             exit_signal=exit_signal,
             exit_executed=exit_executed,
+            trace_id=trace_id,
+            cycle_id=cycle_id,
         )
 
-    # ── Stage 8a: shadow execution (live_shadow mode) ────────────────────────
+    # ── Stage 7a: shadow execution (live_shadow mode) ────────────────────────
     if gate_decision.route == "shadow":
-        # Compute simulated fill price using the same slippage logic as PaperExecutor
         simulated_fill_price = market_price * (
             Decimal("1") + executor.slippage_bps / Decimal("10000")
         )
@@ -573,6 +837,7 @@ def run_paper_cycle(
                 decision_reason=ai_result.explanation,
                 source_cycle_status="shadow_recorded",
             )
+
         shadow_ev = events_repo.record_event(
             event_type="shadow_execution_recorded",
             severity="info",
@@ -590,6 +855,13 @@ def run_paper_cycle(
                 "simulated_slippage_bps": str(executor.slippage_bps),
                 "execution_route": gate_decision.route,
             },
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            symbol=input_data.symbol,
+            side=side,
+            mode=mode,
+            lifecycle_stage="execution_result",
+            reason="live_shadow",
         )
         event_ids.append(shadow_ev.id)
 
@@ -599,6 +871,13 @@ def run_paper_cycle(
             component="paper_cycle",
             message=f"Shadow cycle completed for {input_data.symbol}",
             context={"status": "shadow_recorded"},
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            symbol=input_data.symbol,
+            side=side,
+            mode=mode,
+            lifecycle_stage="execution_result",
+            reason="live_shadow",
         )
         event_ids.append(finished.id)
 
@@ -613,9 +892,11 @@ def run_paper_cycle(
             event_ids=event_ids,
             exit_signal=exit_signal,
             exit_executed=exit_executed,
+            trace_id=trace_id,
+            cycle_id=cycle_id,
         )
 
-    # ── Stage 8b: paper execution ─────────────────────────────────────────────
+    # ── Stage 7b: paper execution ─────────────────────────────────────────────
     exec_result: PaperExecutionResult = executor.execute_market_buy(
         candidate=candidate,
         position_size=size_result,
@@ -623,13 +904,14 @@ def run_paper_cycle(
         executed_at=input_data.now,
     )
 
-    # ── Stage 9: persist order/fill ─────────────────────────────────────────
+    # ── Stage 8: persist order/fill ─────────────────────────────────────────
     if exec_result.approved and exec_result.order is not None and exec_result.fill is not None:
         exec_repo.record_paper_execution(
             order=exec_result.order,
             fill=exec_result.fill,
         )
         order_executed = True
+
         executed_ev = events_repo.record_event(
             event_type="order_executed",
             severity="info",
@@ -648,10 +930,42 @@ def run_paper_cycle(
                 "notional": str(exec_result.order.requested_notional_usdt),
                 "execution_route": gate_decision.route,
             },
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            symbol=input_data.symbol,
+            side=side,
+            mode=mode,
+            lifecycle_stage="execution_result",
+            reason=None,
         )
         event_ids.append(executed_ev.id)
+    else:
+        # Paper execution was not approved — emit execution_result with failure reason
+        fail_reason = (
+            exec_result.reject_reasons[0]
+            if exec_result.reject_reasons
+            else "execution_rejected"
+        )
+        events_repo.record_event(
+            event_type="execution_result",
+            severity="warning",
+            component="paper_cycle",
+            message=f"Paper execution rejected for {input_data.symbol}: {fail_reason}",
+            context={
+                "symbol": input_data.symbol,
+                "reject_reasons": exec_result.reject_reasons,
+                "execution_route": gate_decision.route,
+            },
+            trace_id=trace_id,
+            cycle_id=cycle_id,
+            symbol=input_data.symbol,
+            side=side,
+            mode=mode,
+            lifecycle_stage="execution_result",
+            reason=fail_reason,
+        )
 
-    # ── Stage 10: cycle_finished ─────────────────────────────────────────────
+    # ── Stage 9: cycle_finished ─────────────────────────────────────────────
     finished = events_repo.record_event(
         event_type="cycle_finished",
         severity="info",
@@ -661,6 +975,13 @@ def run_paper_cycle(
             "status": "executed" if order_executed else "no_execution",
             "order_executed": order_executed,
         },
+        trace_id=trace_id,
+        cycle_id=cycle_id,
+        symbol=input_data.symbol,
+        side=side,
+        mode=mode,
+        lifecycle_stage="execution_result" if order_executed else "no_execution",
+        reason=None,
     )
     event_ids.append(finished.id)
 
@@ -675,4 +996,6 @@ def run_paper_cycle(
         event_ids=event_ids,
         exit_signal=exit_signal,
         exit_executed=exit_executed,
+        trace_id=trace_id,
+        cycle_id=cycle_id,
     )
