@@ -187,6 +187,23 @@ Override symbols: `make runtime-supervisor RUNTIME_SYMBOLS=BTCUSDT,ETHUSDT`
 | Supervisor ingest interval | 300s |
 | Supervisor trade interval | 300s |
 
+### Live release gate (preflight only)
+
+Before any `live_small_auto` attempt, run:
+
+```bash
+./scripts/release_gate_live.sh --api-url http://127.0.0.1:8000 --symbol BTCUSDT
+```
+
+What it checks:
+- `ruff`, `pytest`, dashboard build
+- Backend `/health` and `/runtime/control-plane` connectivity
+- `live_small_auto` dry-run preflight (`dry_run=true`) with your symbol
+- Missing-symbol dry-run rejection (`preflight:symbol_required`)
+- `ExecutionGate` still blocks `live_small_auto` by default
+
+If any check fails, the script exits non-zero and prints the blocking reason.
+
 ### Telegram alerts (optional)
 
 If `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set, cycle errors and risk events are sent to Telegram. Without them the system logs to Python logger and continues normally.
