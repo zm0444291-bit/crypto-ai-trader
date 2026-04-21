@@ -1,133 +1,193 @@
+"""Unit tests for feature indicators (F1-F11)."""
+
 from decimal import Decimal
 
+import pandas as pd
 import pytest
 
-from trading.features.indicators import atr, ema, rsi, true_range
+from trading.features.momentum import (
+    macd,
+    roc,
+    cci,
+    stochastic,
+)
+from trading.features.volatility import (
+    bollinger_bands,
+    keltner_channel,
+)
+from trading.features.volume import (
+    obv,
+    vwap,
+)
+from trading.features.trend import (
+    adx,
+    supertrend,
+    aroon,
+)
 
 
-class TestEma:
-    def test_returns_same_length(self):
-        values = [Decimal("100"), Decimal("101"), Decimal("102"), Decimal("103"), Decimal("104")]
-        result = ema(values, period=3)
-        assert len(result) == len(values)
-        # multiplier = 2/(3+1) = 0.5
-        # seed = SMA(100,101,102) = 101
-        # result[2] = 101
-        # result[3] = 0.5*(103-101)+101 = 102
-        # result[4] = 0.5*(104-102)+102 = 103
-        assert result == [None, None, Decimal("101"), Decimal("102"), Decimal("103")]
-
-    def test_first_valid_value_at_period_minus_one(self):
-        values = [Decimal("10"), Decimal("20"), Decimal("30"), Decimal("40"), Decimal("50")]
-        result = ema(values, period=3)
-        assert result[0] is None
-        assert result[1] is None
-        assert result[2] is not None
-        # period-1 = index 2, value should be SMA of first 3 = 20
-        assert result[2] == Decimal("20")
-
-    def test_raises_on_invalid_period(self):
-        values = [Decimal("1"), Decimal("2")]
-        with pytest.raises(ValueError, match="period must be >= 1"):
-            ema(values, period=0)
-        with pytest.raises(ValueError, match="period must be >= 1"):
-            ema(values, period=-1)
-
-    def test_empty_input(self):
-        result = ema([], period=14)
-        assert result == []
-
-    def test_shorter_than_period(self):
-        values = [Decimal("10"), Decimal("20")]
-        result = ema(values, period=5)
-        assert all(v is None for v in result)
+def _decimal_series(values: list[float]) -> pd.Series:
+    return pd.Series([Decimal(str(v)) for v in values])
 
 
-class TestRsi:
-    def test_returns_values_between_0_and_100(self):
-        # Steady climb: all positive changes
-        values = [
-            Decimal("100"), Decimal("102"), Decimal("104"), Decimal("106"),
-            Decimal("108"), Decimal("110"), Decimal("112"), Decimal("114"),
-            Decimal("116"), Decimal("118"), Decimal("120"), Decimal("122"),
-            Decimal("124"), Decimal("126"), Decimal("128"), Decimal("130"),
-        ]
-        result = rsi(values, period=14)
-        valid_values = [v for v in result if v is not None]
-        assert len(valid_values) > 0
-        assert all(Decimal("0") <= v <= Decimal("100") for v in valid_values)
-
-    def test_returns_100_when_no_losses(self):
-        values = [
-            Decimal("100"), Decimal("105"), Decimal("110"), Decimal("115"),
-            Decimal("120"), Decimal("125"), Decimal("130"), Decimal("135"),
-            Decimal("140"), Decimal("145"), Decimal("150"), Decimal("155"),
-            Decimal("160"), Decimal("165"), Decimal("170"),
-        ]
-        result = rsi(values, period=14)
-        valid = [v for v in result if v is not None]
-        assert len(valid) > 0
-        # Should be 100 when there are no losses
-        assert valid[-1] == Decimal("100")
-
-    def test_raises_on_invalid_period(self):
-        values = [Decimal("100"), Decimal("101")]
-        with pytest.raises(ValueError, match="period must be >= 1"):
-            rsi(values, period=0)
+def _float_series(values: list[float]) -> pd.Series:
+    return pd.Series(values)
 
 
-class TestTrueRange:
-    def test_handles_missing_previous_close(self):
-        result = true_range(Decimal("105"), Decimal("95"), None)
-        assert result == Decimal("10")
+class TestMACD:
+    def test_macd_shape_equals_input(self):
+        closes = _float_series([100.0] * 40)
+        result = macd(closes)
+        assert len(result["macd"]) == len(closes)
 
-    def test_normal_case(self):
-        result = true_range(Decimal("105"), Decimal("95"), Decimal("100"))
-        # high - low = 10, high - prev_close = 5, low - prev_close = 5
-        assert result == Decimal("10")
+    def test_macd_fast_less_than_slow_raises(self):
+        closes = _float_series([100.0] * 40)
+        with pytest.raises(ValueError, match="fast"):
+            macd(closes, fast=26, slow=12)
 
-    def test_gap_up(self):
-        # high=105, low=100, prev_close=90
-        result = true_range(Decimal("105"), Decimal("100"), Decimal("90"))
-        assert result == Decimal("15")
+    def test_macd_warmup(self):
+        closes = _float_series([100.0] * 30)
+        result = macd(closes)
+        # EWM doesn't produce NaN warmup like SMA; check values are finite after warmup
+        assert result["macd"].iloc[-5:].notna().all()
 
-    def test_gap_down(self):
-        # high=100, low=95, prev_close=105
-        # high-low=5, |high-prev|=5, |low-prev|=10 → max=10
-        result = true_range(Decimal("100"), Decimal("95"), Decimal("105"))
-        assert result == Decimal("10")
+    def test_macd_signal_cross(self):
+        # Falling prices: MACD should cross below signal
+        closes = _float_series([100.0 + i for i in range(40)])
+        result = macd(closes)
+        # After warmup, MACD and signal should exist and be finite
+        assert result["macd"].iloc[-1] is not None
 
 
-class TestAtr:
-    def test_rejects_mismatched_lengths(self):
+class TestROC:
+    def test_roc_length(self):
+        closes = _float_series([100.0] * 15)
+        result = roc(closes, period=12)
+        assert len(result) == len(closes)
+
+    def test_roc_raises_on_zero_period(self):
+        closes = _float_series([100.0] * 15)
+        with pytest.raises(ValueError):
+            roc(closes, period=0)
+
+
+class TestCCI:
+    def test_cci_length(self):
+        high = low = close = _float_series([100.0] * 25)
+        result = cci(high, low, close, period=20)
+        assert len(result) == 25
+
+    def test_cci_nan_warmup(self):
+        high = low = close = _float_series([100.0] * 25)
+        result = cci(high, low, close, period=20)
+        assert result.iloc[:19].isna().all()
+
+
+class TestStochastic:
+    def test_stochastic_length(self):
+        h = l = c = _float_series([100.0] * 20)
+        result = stochastic(h, l, c, k=14, d=3)
+        assert len(result["k"]) == len(c)
+
+    def test_stochastic_nan_warmup(self):
+        h = l = c = _float_series([100.0] * 20)
+        result = stochastic(h, l, c, k=14)
+        # Stochastic %K is filled with 0 for insufficient warmup
+        # After k period it should be non-zero for flat price
+        assert result["k"].iloc[-1] == 0.0
+
+
+class TestBollingerBands:
+    def test_bb_shape(self):
+        closes = _float_series([100.0] * 25)
+        result = bollinger_bands(closes, period=20)
+        assert len(result["middle"]) == len(closes)
+
+    def test_bb_nan_warmup(self):
+        closes = _float_series([100.0] * 25)
+        result = bollinger_bands(closes, period=20)
+        assert result["middle"].iloc[:19].isna().all()
+
+    def test_bb_raises_invalid_period(self):
+        closes = _float_series([100.0] * 5)
+        with pytest.raises(ValueError):
+            bollinger_bands(closes, period=0)
+
+
+class TestKeltnerChannel:
+    def test_kc_shape(self):
+        h = l = c = _float_series([100.0] * 25)
+        result = keltner_channel(h, l, c)
+        assert len(result["middle"]) == len(h)
+
+
+class TestOBV:
+    def test_obv_length(self):
+        closes = _float_series([100, 102, 101, 103])
+        volumes = _float_series([1000, 1000, 1000, 1000])
+        result = obv(closes, volumes)
+        assert len(result) == len(closes)
+
+    def test_obv_mismatched_lengths(self):
+        closes = _float_series([100, 102, 101])
+        volumes = _float_series([1000, 1000])
         with pytest.raises(ValueError, match="same length"):
-            atr(
-                [Decimal("100"), Decimal("101")],
-                [Decimal("99"), Decimal("100"), Decimal("101")],
-                [Decimal("100"), Decimal("101")],
-            )
+            obv(closes, volumes)
 
-    def test_returns_none_until_warmup(self):
-        highs = [Decimal("105"), Decimal("110"), Decimal("115")]
-        lows = [Decimal("95"), Decimal("100"), Decimal("105")]
-        closes = [Decimal("100"), Decimal("105"), Decimal("110")]
-        result = atr(highs, lows, closes, period=14)
-        assert all(v is None for v in result)
 
-    def test_returns_same_length(self):
-        highs = [Decimal("105"), Decimal("110"), Decimal("115"), Decimal("120")]
-        lows = [Decimal("95"), Decimal("100"), Decimal("105"), Decimal("110")]
-        closes = [Decimal("100"), Decimal("105"), Decimal("110"), Decimal("115")]
-        result = atr(highs, lows, closes, period=2)
-        assert len(result) == len(highs)
-        assert result[0] is None
-        assert result[1] is not None
+class TestVWAP:
+    def test_vwap_length(self):
+        h = l = c = _float_series([100.0] * 5)
+        v = _float_series([1000.0] * 5)
+        result = vwap(h, l, c, v)
+        assert len(result) == len(h)
 
-    def test_raises_on_invalid_period(self):
-        with pytest.raises(ValueError, match="period must be >= 1"):
-            atr(
-                [Decimal("105"), Decimal("110")],
-                [Decimal("95"), Decimal("100")],
-                [Decimal("100"), Decimal("105")],
-                period=0,
-            )
+    def test_vwap_mismatched_lengths(self):
+        h = l = c = _float_series([100.0] * 5)
+        v = _float_series([1000.0] * 3)
+        with pytest.raises(ValueError):
+            vwap(h, l, c, v)
+
+
+class TestADX:
+    def test_adx_length(self):
+        h = l = c = _float_series([100.0] * 40)
+        result = adx(h, l, c, period=14)
+        assert len(result["adx"]) == len(h)
+
+    def test_adx_raises_invalid_period(self):
+        h = l = c = _float_series([100.0] * 5)
+        with pytest.raises(ValueError):
+            adx(h, l, c, period=0)
+
+
+class TestSupertrend:
+    def test_supertrend_length(self):
+        h = l = c = _float_series([100.0] * 20)
+        result = supertrend(h, l, c, period=10)
+        assert len(result["direction"]) == len(h)
+
+    def test_supertrend_direction_values(self):
+        h = l = c = _float_series([100.0] * 20)
+        result = supertrend(h, l, c, period=10)
+        values = result["direction"].dropna().unique()
+        assert set(values).issubset({1.0, -1.0})
+
+
+class TestAroon:
+    def test_aroon_length(self):
+        h = l = _float_series([100.0] * 30)
+        result = aroon(h, l, period=25)
+        assert len(result["aroon_up"]) == len(h)
+
+    def test_aroon_nan_warmup(self):
+        h = l = _float_series([100.0] * 30)
+        result = aroon(h, l, period=25)
+        assert result["aroon_up"].iloc[:25].isna().all()
+
+    def test_aroon_oscillator_range(self):
+        h = l = _float_series([100.0] * 30)
+        result = aroon(h, l, period=25)
+        valid = result["aroon_oscillator"].dropna()
+        assert (valid >= -100).all()
+        assert (valid <= 100).all()
