@@ -195,6 +195,13 @@ Before any `live_small_auto` attempt, run:
 ./scripts/release_gate_live.sh --api-url http://127.0.0.1:8000 --symbol BTCUSDT
 ```
 
+**Structured output (JSON):** for dashboard or CI/CD consumption:
+
+```bash
+./scripts/release_gate_live.sh --format json --output gate.json
+cat gate.json
+```
+
 What it checks:
 - `ruff`, `pytest`, dashboard build
 - Backend `/health` and `/runtime/control-plane` connectivity
@@ -203,6 +210,10 @@ What it checks:
 - `ExecutionGate` still blocks `live_small_auto` by default
 
 If any check fails, the script exits non-zero and prints the blocking reason.
+
+**Flags:** `--format text|json` (default: text), `--output <path>` (write to file), `--quiet` (suppress text output), `--dry-run` (no-op, backwards compatibility).
+
+**JSON output** includes: `generated_at`, `mode`, `summary { pass, allow_live_shadow, allow_live_small_auto_dry_run, blocked_reasons }`, `checks[] { code, status, message }`, and `runtime_snapshot { trade_mode, lock_enabled, transition_guard_to_live_small_auto, risk_state, heartbeat_stale_alerting }`.
 
 ### Telegram alerts (optional)
 

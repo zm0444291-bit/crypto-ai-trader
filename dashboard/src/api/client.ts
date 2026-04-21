@@ -263,6 +263,63 @@ export async function exitLocalSystem(confirm = true): Promise<SystemExitRespons
   return data as SystemExitResponse;
 }
 
+export async function getReleaseGateStatus(): Promise<ReleaseGateResponse> {
+  return apiFetch<ReleaseGateResponse>('/runtime/release-gate/live');
+}
+
+// ── Release Gate types ──────────────────────────────────────────────────────────
+
+export interface ReleaseGateCheck {
+  code: string;
+  status: 'pass' | 'fail' | 'warn';
+  message: string;
+}
+
+export interface ReleaseGateEnvironment {
+  database_ok: boolean;
+  binance_key_present: boolean;
+  binance_secret_present: boolean;
+  exchanges_yaml_ok: boolean;
+}
+
+export interface ReleaseGateControlPlane {
+  trade_mode: string;
+  lock_enabled: boolean;
+  execution_route: string;
+  transition_guard_to_live_small_auto: string;
+}
+
+export interface ReleaseGateRisk {
+  resolved_risk_state: string;
+  day_start_equity: string;
+  current_equity: string;
+  daily_pnl_pct: string;
+  risk_reason: string;
+}
+
+export interface ReleaseGateHealth {
+  supervisor_alive: boolean | null;
+  ingestion_thread_alive: boolean | null;
+  trading_thread_alive: boolean | null;
+  heartbeat_stale_alerting: boolean;
+}
+
+export interface ReleaseGateSummary {
+  allow_live_shadow: boolean;
+  allow_live_small_auto_dry_run: boolean;
+  blocked_reasons: string[];
+}
+
+export interface ReleaseGateResponse {
+  generated_at: string;
+  environment: ReleaseGateEnvironment;
+  control_plane: ReleaseGateControlPlane;
+  risk: ReleaseGateRisk;
+  health: ReleaseGateHealth;
+  checks: ReleaseGateCheck[];
+  summary: ReleaseGateSummary;
+}
+
 // ── Analytics types ──────────────────────────────────────────────────────────
 
 export interface AnalyticsSummary {

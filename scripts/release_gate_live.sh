@@ -5,61 +5,115 @@
 # Exits 0 only when all checks pass.
 # In RELEASE_GATE_TEST_MODE=1, network/API checks are skipped so tests do not
 # depend on a running backend.
+#
+# Structured output: human-readable (text, default) or JSON (--format json).
 # =============================================================================
 set -euo pipefail
 
+# --- ANSI colours ---
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BOLD='\033[1m'; RESET='\033[0m'
 
-step() { echo -e "${BOLD}[$1]${RESET} $2"; }
-pass() { echo -e "${GREEN}✓${RESET} $1"; CHECKS_PASSED=$((CHECKS_PASSED + 1)); }
-warn() { echo -e "${YELLOW}⚠${RESET} $1"; }
-fail() { echo -e "${RED}✗ FAIL:${RESET} $1"; CHECKS_FAILED=$((CHECKS_FAILED + 1)); }
-
-TOTAL=8
-CHECKS_PASSED=0
-CHECKS_FAILED=0
-
+# --- Default settings ---
 API_URL="${API_URL:-http://127.0.0.1:8000}"
 SYMBOL="${SYMBOL:-BTCUSDT}"
 PYTEST_TIMEOUT_SECONDS="${PYTEST_TIMEOUT_SECONDS:-180}"
 BUILD_TIMEOUT_SECONDS="${BUILD_TIMEOUT_SECONDS:-180}"
 
+# --- Output mode ---
+OUTPUT_FORMAT="text"
+OUTPUT_FILE=""
+QUIET="false"
+
+# --- Check counters ---
+TOTAL=8
+CHECKS_PASSED=0
+CHECKS_FAILED=0
+
+# --- Runtime snapshots (populated by checks) ---
+_snap_trade_mode=""
+_snap_lock_enabled="null"
+_snap_guard="null"
+_snap_risk_state="null"
+_snap_heartbeat_stale="null"
+
+# --- Helpers ---
+
+step() {
+    if [[ "$QUIET" == "true" || "$OUTPUT_FORMAT" == "json" ]]; then return; fi
+    echo -e "${BOLD}[$1]${RESET} $2"
+}
+pass() {
+    if [[ "$QUIET" != "true" && "$OUTPUT_FORMAT" != "json" ]]; then
+        echo -e "${GREEN}✓${RESET} $1"
+    fi
+    CHECKS_PASSED=$((CHECKS_PASSED + 1))
+    _record_check "$1" "pass"
+}
+warn() {
+    if [[ "$QUIET" != "true" && "$OUTPUT_FORMAT" != "json" ]]; then
+        echo -e "${YELLOW}⚠${RESET} $1"
+    fi
+    _record_check "$1" "warn"
+}
+fail() {
+    if [[ "$QUIET" != "true" && "$OUTPUT_FORMAT" != "json" ]]; then
+        echo -e "${RED}✗ FAIL:${RESET} $1"
+    fi
+    CHECKS_FAILED=$((CHECKS_FAILED + 1))
+    _record_check "$1" "fail"
+}
+
+# =============================================================================
+# CHECK REGISTRY — stored as lines: "STATUS|CODE|MESSAGE"
+# =============================================================================
+
+_REGISTRY_FILE=""
+_current_check_code=""
+
+_init_registry() {
+    _REGISTRY_FILE="$(mktemp)"
+}
+
+_record_check() {
+    local msg="$1"
+    local status="$2"
+    local code="$_current_check_code"
+    # | is safe inside the temp file since messages are escaped at JSON emission time
+    printf "%s|%s|%s\n" "$status" "$code" "$msg" >> "$_REGISTRY_FILE"
+}
+
 usage() {
     cat <<EOF
-Usage: $0 [--api-url URL] [--symbol SYMBOL]
+Usage: $0 [options]
 
 Options:
-  --api-url URL    Backend API base URL (default: ${API_URL})
-  --symbol SYMBOL  Symbol used for live_small_auto dry-run preflight (default: ${SYMBOL})
+  --api-url URL      Backend API base URL (default: ${API_URL})
+  --symbol SYMBOL    Symbol used for live_small_auto dry-run preflight (default: ${SYMBOL})
+  --format text|json Output format (default: text)
+  --output <path>    Write output to file (default: stdout; recommended for json)
+  --quiet            Suppress non-essential text output
+  --dry-run          No-op (backwards compatibility; this script is always a preflight)
+  -h|--help          Show this help
+
+Exit codes:
+  0  All checks passed
+  1  One or more checks failed
+  2  Invalid arguments
 EOF
 }
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --api-url)
-            API_URL="$2"
-            shift 2
-            ;;
-        --symbol)
-            SYMBOL="$2"
-            shift 2
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        *)
-            echo "Unknown argument: $1"
-            usage
-            exit 1
-            ;;
+snap() {
+    local key="$1"
+    local val="$2"
+    case "$key" in
+        trade_mode)    _snap_trade_mode="$val" ;;
+        lock_enabled)  _snap_lock_enabled="$val" ;;
+        guard)         _snap_guard="$val" ;;
+        risk_state)    _snap_risk_state="$val" ;;
+        heartbeat)     _snap_heartbeat_stale="$val" ;;
     esac
-done
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-cd "$PROJECT_ROOT"
+}
 
 is_test_mode() {
     [[ "${RELEASE_GATE_TEST_MODE:-}" == "1" ]]
@@ -86,9 +140,7 @@ run_with_timeout() {
         "$tcmd" "$seconds" "$@"
     else
         python3 - "$seconds" "$@" <<'PY'
-import subprocess
-import sys
-
+import subprocess, sys
 timeout_seconds = int(sys.argv[1])
 cmd = sys.argv[2:]
 try:
@@ -133,9 +185,7 @@ json_get() {
     local json="$1"
     local key="$2"
     python3 - "$key" <<'PY' <<<"$json" || true
-import json
-import sys
-
+import json, sys
 key = sys.argv[1]
 try:
     d = json.loads(sys.stdin.read() or "{}")
@@ -147,7 +197,12 @@ print(v if v is not None else "")
 PY
 }
 
+# =============================================================================
+# CHECKS
+# =============================================================================
+
 run_ruff() {
+    _current_check_code="ruff"
     step "1/$TOTAL" "Running ruff check…"
     if is_test_mode; then
         if command -v ruff >/dev/null 2>&1; then
@@ -165,6 +220,7 @@ run_ruff() {
 }
 
 run_pytest() {
+    _current_check_code="pytest"
     step "2/$TOTAL" "Running pytest…"
     if [[ -n "${PYTEST_CURRENT_TEST:-}" ]] && ! is_test_mode; then
         fail "Detected pytest context (PYTEST_CURRENT_TEST) — refusing nested pytest run"
@@ -186,6 +242,7 @@ run_pytest() {
 }
 
 build_dashboard() {
+    _current_check_code="dashboard_build"
     step "3/$TOTAL" "Building dashboard…"
     if is_test_mode; then
         if command -v npm >/dev/null 2>&1 && [[ -d "dashboard" ]]; then
@@ -204,6 +261,7 @@ build_dashboard() {
 }
 
 check_health() {
+    _current_check_code="health"
     step "4/$TOTAL" "Checking /health"
     if is_test_mode; then
         pass "Skipping API connectivity in test mode"
@@ -222,6 +280,7 @@ check_health() {
 }
 
 check_control_plane() {
+    _current_check_code="control_plane"
     step "5/$TOTAL" "Checking /runtime/control-plane"
     if is_test_mode; then
         pass "Skipping control-plane API checks in test mode"
@@ -239,6 +298,9 @@ check_control_plane() {
     mode="$(json_get "$body" "trade_mode")"
     lock="$(json_get "$body" "lock_enabled")"
     guard="$(json_get "$body" "transition_guard_to_live_small_auto")"
+    snap "trade_mode" "$mode"
+    snap "lock_enabled" "$lock"
+    snap "guard" "$guard"
     pass "Control plane reachable (mode=${mode})"
     if [[ "$guard" == blocked:* ]]; then
         fail "transition_guard_to_live_small_auto is blocked: ${guard}"
@@ -253,6 +315,7 @@ check_control_plane() {
 }
 
 check_mode_dry_run() {
+    _current_check_code="dry_run_preflight"
     step "6/$TOTAL" "Dry-run mode preflight (no persistence)"
     if is_test_mode; then
         pass "Skipping dry-run API checks in test mode"
@@ -294,6 +357,7 @@ EOF
 }
 
 check_gate_guardrail() {
+    _current_check_code="gate_guardrail"
     step "7/$TOTAL" "Checking execution gate guardrail (live_small_auto blocked by default)"
     if python3 - <<'PY'
 from trading.execution.gate import ExecutionGate, LiveTradingLock
@@ -314,6 +378,7 @@ PY
 }
 
 check_mode_unchanged_after_dry_run() {
+    _current_check_code="mode_persistence"
     step "8/$TOTAL" "Verifying dry-run did not mutate mode"
     if is_test_mode; then
         pass "Skipping mode persistence verification in test mode"
@@ -331,11 +396,134 @@ check_mode_unchanged_after_dry_run() {
     pass "Current mode remains ${mode} after dry-run checks"
 }
 
-echo -e "${BOLD}=== Release Gate v1 (live_small_auto) ===${RESET}"
-echo "API_URL=${API_URL}"
-echo "SYMBOL=${SYMBOL}"
-echo "UTC=$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-echo
+# =============================================================================
+# JSON EMISSION (pure Python — clean, robust)
+# =============================================================================
+
+_emit_json() {
+    python3 - "$_REGISTRY_FILE" \
+        "$CHECKS_PASSED" "$CHECKS_FAILED" \
+        "$_snap_trade_mode" "$_snap_lock_enabled" "$_snap_guard" \
+        "$_snap_risk_state" "$_snap_heartbeat_stale" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+
+registry_path = sys.argv[1]
+checks_passed = int(sys.argv[2])
+checks_failed = int(sys.argv[3])
+snap_mode = sys.argv[4] or "unknown"
+snap_lock = sys.argv[5] if sys.argv[5] != "null" else None
+snap_guard = sys.argv[6] if sys.argv[6] != "null" else None
+snap_risk = sys.argv[7] if sys.argv[7] != "null" else None
+snap_heartbeat = sys.argv[8] if sys.argv[8] != "null" else None
+
+# Parse registry: "STATUS|CODE|MESSAGE" lines
+checks = []
+blocked_reasons = []
+with open(registry_path, "r") as f:
+    for line in f:
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        parts = line.split("|", 2)
+        if len(parts) != 3:
+            continue
+        status, code, message = parts
+        checks.append({"code": code, "status": status, "message": message})
+        if status == "fail":
+            blocked_reasons.append(message)
+
+generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+# Determine summary booleans
+pass_all = (checks_failed == 0)
+# live_shadow readiness: depends on baseline runtime/script checks, not dry-run preflight.
+live_shadow_blocking_codes = {
+    "ruff",
+    "pytest",
+    "dashboard_build",
+    "health",
+    "control_plane",
+    "gate_guardrail",
+    "mode_persistence",
+}
+failed_codes = {c["code"] for c in checks if c["status"] == "fail"}
+allow_live_shadow = len(live_shadow_blocking_codes & failed_codes) == 0
+allow_live_small_auto_dry_run = pass_all  # dry-run passes only when all checks pass
+
+result = {
+    "generated_at": generated_at,
+    "mode": "paper_safe_gate",
+    "summary": {
+        "pass": pass_all,
+        "allow_live_shadow": allow_live_shadow,
+        "allow_live_small_auto_dry_run": allow_live_small_auto_dry_run,
+        "blocked_reasons": blocked_reasons,
+    },
+    "checks": checks,
+    "runtime_snapshot": {
+        "trade_mode": snap_mode,
+        "lock_enabled": snap_lock,
+        "transition_guard_to_live_small_auto": snap_guard,
+        "risk_state": snap_risk,
+        "heartbeat_stale_alerting": snap_heartbeat,
+    },
+}
+
+print(json.dumps(result, indent=2))
+PY
+    return $?
+}
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --api-url)
+            API_URL="$2"; shift 2 ;;
+        --symbol)
+            SYMBOL="$2"; shift 2 ;;
+        --format)
+            OUTPUT_FORMAT="$2"; shift 2 ;;
+        --output)
+            OUTPUT_FILE="$2"; shift 2 ;;
+        --quiet)
+            QUIET="true"; shift ;;
+        --dry-run)
+            # No-op: this script is always a preflight; kept for backwards compatibility
+            shift ;;
+        -h|--help)
+            usage; exit 0 ;;
+        *)
+            echo "Unknown argument: $1" >&2
+            usage; exit 2 ;;
+    esac
+done
+
+if [[ "$OUTPUT_FORMAT" != "text" && "$OUTPUT_FORMAT" != "json" ]]; then
+    echo "ERROR: --format must be 'text' or 'json', got '$OUTPUT_FORMAT'" >&2
+    exit 2
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_ROOT"
+
+# Initialize check registry
+_init_registry
+
+# Clean up registry on exit
+trap 'rm -f "$_REGISTRY_FILE"' EXIT
+
+if [[ "$OUTPUT_FORMAT" != "json" ]]; then
+    echo -e "${BOLD}=== Release Gate v1 (live_small_auto) ===${RESET}"
+    echo "API_URL=${API_URL}"
+    echo "SYMBOL=${SYMBOL}"
+    echo "UTC=$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    echo
+fi
 
 run_ruff
 run_pytest
@@ -346,13 +534,31 @@ check_mode_dry_run
 check_gate_guardrail
 check_mode_unchanged_after_dry_run
 
-echo
-echo -e "${BOLD}=== Summary ===${RESET}"
-echo "Passed: ${CHECKS_PASSED}"
-echo "Failed: ${CHECKS_FAILED}"
+if [[ "$OUTPUT_FORMAT" != "json" ]]; then
+    echo
+    echo -e "${BOLD}=== Summary ===${RESET}"
+    echo "Passed: ${CHECKS_PASSED}"
+    echo "Failed: ${CHECKS_FAILED}"
+fi
+
+# --- JSON output (stdout only; suppress text verdict) ---
+if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+    json_out="$(_emit_json)" || {
+        echo "ERROR: JSON emission failed" >&2
+        exit 1
+    }
+    if [[ -n "$OUTPUT_FILE" ]]; then
+        echo "$json_out" > "$OUTPUT_FILE"
+    else
+        echo "$json_out"
+    fi
+    # In JSON mode, suppress the text verdict; exit code communicates result
+    exit $((CHECKS_FAILED > 0 ? 1 : 0))
+fi
+
 if [[ "$CHECKS_FAILED" -gt 0 ]]; then
-    echo -e "${RED}RELEASE GATE FAILED${RESET}"
+    [[ "$QUIET" != "true" ]] && echo -e "${RED}RELEASE GATE FAILED${RESET}"
     exit 1
 fi
-echo -e "${GREEN}RELEASE GATE PASSED${RESET}"
+[[ "$QUIET" != "true" ]] && echo -e "${GREEN}RELEASE GATE PASSED${RESET}"
 exit 0

@@ -5,6 +5,7 @@ import {
   getRuntimeStatus,
   getMarketDataStatus,
   getControlPlane,
+  getReleaseGateStatus,
   setControlPlaneMode,
   setLiveLock,
   exitLocalSystem,
@@ -12,6 +13,7 @@ import {
   type RuntimeStatus,
   type MarketDataStatus,
   type ControlPlaneResponse,
+  type ReleaseGateResponse,
   type TradeMode,
   type ModeChangeResponse,
   type LiveLockChangeResponse,
@@ -49,6 +51,8 @@ export default function Settings() {
   const [controlPlane, setControlPlane] = useState<ControlPlaneResponse | null>(null);
   const [controlPlaneFailed, setControlPlaneFailed] = useState(false);
   const [runtimeFailed, setRuntimeFailed] = useState(false);
+  const [releaseGate, setReleaseGate] = useState<ReleaseGateResponse | null>(null);
+  const [releaseGateFailed, setReleaseGateFailed] = useState(false);
 
   const [modeValue, setModeValue] = useState<string>('paper_auto');
   const [allowLiveUnlock, setAllowLiveUnlock] = useState(false);
@@ -102,6 +106,9 @@ export default function Settings() {
     getControlPlane()
       .then((data) => { setControlPlane(data); setControlPlaneFailed(false); })
       .catch(() => setControlPlaneFailed(true));
+    getReleaseGateStatus()
+      .then((data) => { setReleaseGate(data); setReleaseGateFailed(false); })
+      .catch(() => setReleaseGateFailed(true));
   }, []);
 
   const handleApplyMode = async () => {
@@ -350,6 +357,66 @@ export default function Settings() {
           );
         })()
       )}
+
+      {/* ── 实盘前置检查（只读）────────────────────────────── */}
+      {!releaseGateFailed && releaseGate ? (
+        <div className="settings-section">
+          <div className="settings-title">实盘前置检查（只读）</div>
+
+          {/* 状态徽章行 */}
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+            <span className={`row-value ${releaseGate.summary.allow_live_shadow ? 'positive' : 'negative'}`}>
+              {releaseGate.summary.allow_live_shadow ? '✓' : '✗'} 可进入 live_shadow
+            </span>
+            <span className={`row-value ${releaseGate.summary.allow_live_small_auto_dry_run ? 'positive' : 'negative'}`}>
+              {releaseGate.summary.allow_live_small_auto_dry_run ? '✓' : '✗'} 可申请 live_small_auto（dry-run 评估）
+            </span>
+          </div>
+
+          {/* 检查项列表 */}
+          {releaseGate.checks.map((check, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 4 }}>
+              <span style={{
+                color: check.status === 'pass' ? '#16a34a' : check.status === 'fail' ? '#dc2626' : '#d97706',
+                fontSize: 14,
+              }}>
+                {check.status === 'pass' ? '✓' : check.status === 'fail' ? '✗' : '⚠'}
+              </span>
+              <span className="row-value" style={{ fontSize: 13 }}>{check.message}</span>
+            </div>
+          ))}
+
+          {/* 阻断原因 */}
+          {releaseGate.summary.blocked_reasons.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <div className="row-label" style={{ marginBottom: 4 }}>阻断原因</div>
+              {releaseGate.summary.blocked_reasons.map((reason, i) => (
+                <div key={i} className="reminder-row reminder-danger" style={{ fontSize: 12 }}>
+                  <span className="reminder-dot reminder-dot-danger" />
+                  <span className="reminder-message">{reason}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 安全免责 */}
+          <div className="safety-notice" style={{ marginTop: 10, fontSize: 12 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0, marginTop: 1 }} aria-hidden="true">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            <span>
+              dry-run 评估通过 ≠ 允许真实下单。live_small_auto 必须通过双重解锁和人工审核。
+            </span>
+          </div>
+        </div>
+      ) : releaseGateFailed ? (
+        <div className="settings-section">
+          <div className="settings-title">实盘前置检查（只读）</div>
+          <div className="safety-notice">
+            <span>检查结果不可用，请检查后端服务是否正常运行。</span>
+          </div>
+        </div>
+      ) : null}
 
       <div className="settings-section">
         <div className="settings-title">系统信息</div>

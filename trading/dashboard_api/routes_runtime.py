@@ -499,6 +499,81 @@ class SystemExitResponse(BaseModel):
     message: str
 
 
+# ── Release Gate Response Models ───────────────────────────────────────────────
+
+
+class ReleaseGateCheck(BaseModel):
+    """Single check item in the release gate assessment."""
+
+    code: str
+    status: Literal["pass", "fail", "warn"]
+    message: str
+
+
+class ReleaseGateRisk(BaseModel):
+    """Risk subsystem snapshot within the release gate response."""
+
+    resolved_risk_state: str  # RiskState or "unavailable"
+    day_start_equity: str
+    current_equity: str
+    daily_pnl_pct: str
+    risk_reason: str
+
+
+class ReleaseGateHealth(BaseModel):
+    """Runtime health snapshot within the release gate response."""
+
+    supervisor_alive: bool | None
+    ingestion_thread_alive: bool | None
+    trading_thread_alive: bool | None
+    heartbeat_stale_alerting: bool
+
+
+class ReleaseGateControlPlane(BaseModel):
+    """Control plane snapshot within the release gate response."""
+
+    trade_mode: str
+    lock_enabled: bool
+    execution_route: str
+    transition_guard_to_live_small_auto: str
+
+
+class ReleaseGateEnvironment(BaseModel):
+    """Environment/config snapshot within the release gate response.
+
+    Keys are NEVER included — only presence booleans.
+    """
+
+    database_ok: bool
+    binance_key_present: bool  # True if env var is non-empty, False otherwise
+    binance_secret_present: bool
+    exchanges_yaml_ok: bool
+
+
+class ReleaseGateSummary(BaseModel):
+    """Top-level allow/deny summary of the release gate assessment."""
+
+    allow_live_shadow: bool
+    allow_live_small_auto_dry_run: bool
+    blocked_reasons: list[str]
+
+
+class ReleaseGateResponse(BaseModel):
+    """Read-only release gate assessment for live trading pre-flight.
+
+    Intended for dashboard visualization only — this endpoint does NOT
+    write any events or modify any state.
+    """
+
+    generated_at: str
+    environment: ReleaseGateEnvironment
+    control_plane: ReleaseGateControlPlane
+    risk: ReleaseGateRisk
+    health: ReleaseGateHealth
+    checks: list[ReleaseGateCheck]
+    summary: ReleaseGateSummary
+
+
 def _perform_local_shutdown(current_pid: int) -> None:
     """Terminate local runtime/backend/dashboard processes for one-click exit."""
     patterns = (
@@ -904,6 +979,506 @@ def read_control_plane() -> ControlPlaneResponse:
             execution_route="paper",
             transition_guard_to_live_small_auto="blocked: unavailable",
         )
+
+
+@router.get("/runtime/release-gate/live", response_model=ReleaseGateResponse)
+def read_release_gate_live() -> ReleaseGateResponse:
+    """Read-only release gate assessment for live trading pre-flight.
+
+    Returns a structured snapshot of environment, control plane, risk, and
+    health state so operators can visually verify whether live_shadow or
+    live_small_auto (dry-run) entry conditions are met.
+
+    This endpoint NEVER writes events or modifies any state.
+
+    Fail-closed: any error returns allow=false with blocked_reasons describing
+    the failure, never raising a 500.
+    """
+    now_utc = datetime.now(UTC)
+
+    # ── Try to initialize DB ───────────────────────────────────────────────
+    try:
+        settings = AppSettings()
+        engine = create_database_engine(settings.database_url)
+        init_db(engine)
+        session_factory = create_session_factory(engine)
+        database_ok = True
+    except Exception:
+        return _fail_closed_release_gate(
+            generated_at=now_utc.isoformat(),
+            blocked_reasons=["数据库初始化失败（database_ok=false）"],
+            database_ok=False,
+        )
+
+    try:
+        with session_factory() as session:
+            events_repo = EventsRepository(session)
+            exec_repo = ExecutionRecordsRepository(session)
+            candles_repo = CandlesRepository(session)
+
+            # ── Environment ────────────────────────────────────────────────────
+            binance_key_present = bool(os.environ.get("BINANCE_API_KEY", "").strip())
+            binance_secret_present = bool(os.environ.get("BINANCE_API_SECRET", "").strip())
+            exchanges_yaml_ok = _load_allowed_symbols() is not None
+
+            # ── Control plane ──────────────────────────────────────────────────
+            current_mode = get_trade_mode(session_factory)
+            lock_state = get_live_trading_lock(session_factory)
+            transition_guard = validate_mode_transition(
+                current_mode,
+                "live_small_auto",
+                lock_enabled=lock_state.enabled,
+                allow_live_unlock=False,
+            )
+
+            # ── Health (from events) ────────────────────────────────────────────
+            all_events = events_repo.list_recent(limit=500)
+            heartbeat_cutoff = now_utc - timedelta(minutes=2)
+            supervisor_alive: bool | None = None
+            ingestion_thread_alive: bool | None = None
+            trading_thread_alive: bool | None = None
+
+            most_recent_heartbeat: Any = None
+            for e in all_events:
+                if e.event_type == "supervisor_heartbeat":
+                    most_recent_heartbeat = e
+                    break
+
+            if most_recent_heartbeat is not None:
+                hb_created = _to_aware_utc(most_recent_heartbeat.created_at)
+                if hb_created and hb_created >= heartbeat_cutoff:
+                    supervisor_alive = True
+                elif hb_created:
+                    supervisor_alive = False
+                ctx = most_recent_heartbeat.context_json or {}
+                raw = ctx.get("ingest_thread_alive")
+                ingestion_thread_alive = bool(raw) if raw is not None else None
+                raw = ctx.get("trading_thread_alive")
+                trading_thread_alive = bool(raw) if raw is not None else None
+
+            latest_heartbeat_lost_time: datetime | None = None
+            latest_heartbeat_recovered_time: datetime | None = None
+            for e in all_events:
+                t = _to_aware_utc(e.created_at)
+                if e.event_type == "heartbeat_recovered" and t:
+                    is_newer = (
+                        latest_heartbeat_recovered_time is None
+                        or t > latest_heartbeat_recovered_time
+                    )
+                    if is_newer:
+                        latest_heartbeat_recovered_time = t
+                elif e.event_type == "heartbeat_lost" and t:
+                    if latest_heartbeat_lost_time is None or t > latest_heartbeat_lost_time:
+                        latest_heartbeat_lost_time = t
+
+            heartbeat_stale_alerting = (
+                latest_heartbeat_lost_time is not None
+                and (
+                    latest_heartbeat_recovered_time is None
+                    or latest_heartbeat_lost_time > latest_heartbeat_recovered_time
+                )
+            )
+
+            # ── Risk (reusing existing logic) ─────────────────────────────────
+            risk_info = _resolve_risk_info(
+                session_factory, events_repo, exec_repo, candles_repo
+            )
+
+            # ── Build checks list ──────────────────────────────────────────────
+            checks: list[ReleaseGateCheck] = []
+
+            _msg_ok = "已配置（仅验证存在性）"
+            _msg_fail = "未配置或为空"
+            _msg_yaml_ok = "解析正常"
+            _msg_yaml_fail = "不可用或解析失败"
+            _msg_db_ok = "数据库连接正常"
+            _msg_db_fail = "数据库连接失败"
+            _msg_supervisor_ok = "Supervisor 心跳正常"
+            _msg_supervisor_fail = "Supervisor 心跳已过期"
+            _msg_supervisor_warn = "无 Supervisor 心跳记录"
+            _msg_ingestion_ok = "行情拉取线程存活"
+            _msg_ingestion_fail = "行情拉取线程心跳过期"
+            _msg_ingestion_warn = "无行情拉取线程心跳"
+            _msg_trading_ok = "交易线程存活"
+            _msg_trading_fail = "交易线程心跳过期"
+            _msg_trading_warn = "无交易线程心跳"
+            _msg_heartbeat_stale_fail = "心跳持续丢失，运行时可能卡死"
+            _msg_heartbeat_stale_pass = "无心跳超时告警"
+            _msg_lock_fail = "真实交易锁已启用"
+            _msg_lock_pass = "真实交易锁未启用"
+            _msg_risk_fail = "阻止实盘交易"
+            _msg_risk_warn = "只读模式"
+            _msg_risk_unavail = "缺少今日基线数据"
+            _msg_api_key = "BINANCE_API_KEY"
+            _msg_api_secret = "BINANCE_API_SECRET"
+            _msg_exch = "exchanges.yaml"
+            _msg_dry = "allow_live_small_auto_dry_run"
+            _msg_shadow = "allow_live_shadow"
+            _msg_risk_state = "风险状态"
+            _msg_transition = "模式迁移约束"
+
+            # Environment checks
+            if binance_key_present:
+                checks.append(ReleaseGateCheck(
+                    code="env:binance_api_key", status="pass",
+                    message=f"{_msg_api_key} {_msg_ok}"))
+            else:
+                checks.append(ReleaseGateCheck(
+                    code="env:binance_api_key", status="fail",
+                    message=f"{_msg_api_key} {_msg_fail}"))
+
+            if binance_secret_present:
+                checks.append(ReleaseGateCheck(
+                    code="env:binance_api_secret", status="pass",
+                    message=f"{_msg_api_secret} {_msg_ok}"))
+            else:
+                checks.append(ReleaseGateCheck(
+                    code="env:binance_api_secret", status="fail",
+                    message=f"{_msg_api_secret} {_msg_fail}"))
+
+            if exchanges_yaml_ok:
+                checks.append(ReleaseGateCheck(
+                    code="env:exchanges_yaml", status="pass",
+                    message=f"{_msg_exch} {_msg_yaml_ok}"))
+            else:
+                checks.append(ReleaseGateCheck(
+                    code="env:exchanges_yaml", status="fail",
+                    message=f"{_msg_exch} {_msg_yaml_fail}"))
+
+            checks.append(ReleaseGateCheck(
+                code="env:database", status="pass" if database_ok else "fail",
+                message=_msg_db_ok if database_ok else _msg_db_fail))
+
+            # Health checks
+            if supervisor_alive is True:
+                checks.append(ReleaseGateCheck(
+                    code="health:supervisor_alive", status="pass",
+                    message=_msg_supervisor_ok))
+            elif supervisor_alive is False:
+                checks.append(ReleaseGateCheck(
+                    code="health:supervisor_alive", status="fail",
+                    message=_msg_supervisor_fail))
+            else:
+                checks.append(ReleaseGateCheck(
+                    code="health:supervisor_alive", status="warn",
+                    message=_msg_supervisor_warn))
+
+            if ingestion_thread_alive is True:
+                checks.append(ReleaseGateCheck(
+                    code="health:ingestion_alive", status="pass",
+                    message=_msg_ingestion_ok))
+            elif ingestion_thread_alive is False:
+                checks.append(ReleaseGateCheck(
+                    code="health:ingestion_alive", status="fail",
+                    message=_msg_ingestion_fail))
+            else:
+                checks.append(ReleaseGateCheck(
+                    code="health:ingestion_alive", status="warn",
+                    message=_msg_ingestion_warn))
+
+            if trading_thread_alive is True:
+                checks.append(ReleaseGateCheck(
+                    code="health:trading_alive", status="pass",
+                    message=_msg_trading_ok))
+            elif trading_thread_alive is False:
+                checks.append(ReleaseGateCheck(
+                    code="health:trading_alive", status="fail",
+                    message=_msg_trading_fail))
+            else:
+                checks.append(ReleaseGateCheck(
+                    code="health:trading_alive", status="warn",
+                    message=_msg_trading_warn))
+
+            if heartbeat_stale_alerting:
+                checks.append(ReleaseGateCheck(
+                    code="health:heartbeat_stale", status="fail",
+                    message=_msg_heartbeat_stale_fail))
+            else:
+                checks.append(ReleaseGateCheck(
+                    code="health:heartbeat_stale", status="pass",
+                    message=_msg_heartbeat_stale_pass))
+
+            # Control plane checks
+            if lock_state.enabled:
+                checks.append(ReleaseGateCheck(
+                    code="cp:live_lock", status="fail",
+                    message=f"{_msg_lock_fail}（{lock_state.reason or '未说明原因'}）"))
+            else:
+                checks.append(ReleaseGateCheck(
+                    code="cp:live_lock", status="pass",
+                    message=_msg_lock_pass))
+
+            mode_ok = current_mode in ("paused", "paper_auto", "live_shadow")
+            checks.append(ReleaseGateCheck(
+                code="cp:trade_mode",
+                status="pass" if mode_ok else "warn",
+                message=f"当前模式：{current_mode}",
+            ))
+
+            # Dry-run transition guard alignment:
+            # Use allow_live_unlock=True to mirror an operator-triggered dry-run request.
+            dry_run_transition_guard = validate_mode_transition(
+                current_mode,
+                "live_small_auto",
+                lock_enabled=lock_state.enabled,
+                allow_live_unlock=True,
+            )
+            checks.append(ReleaseGateCheck(
+                code="cp:mode_transition_to_live_small_auto_dry_run",
+                status="pass" if dry_run_transition_guard.allowed else "fail",
+                message=(
+                    f"{_msg_transition}通过：{dry_run_transition_guard.reason}"
+                    if dry_run_transition_guard.allowed
+                    else f"{_msg_transition}阻断：{dry_run_transition_guard.reason}"
+                ),
+            ))
+
+            # Risk checks
+            risk_state = risk_info["risk_state"]
+            if risk_state == "unavailable":
+                checks.append(ReleaseGateCheck(
+                    code="risk:state", status="warn",
+                    message=f"{_msg_risk_state}不可用（{_msg_risk_unavail}）"))
+            elif risk_state in ("global_pause", "emergency_stop"):
+                checks.append(ReleaseGateCheck(
+                    code="risk:state", status="fail",
+                    message=f"{_msg_risk_state}：{risk_state} — {_msg_risk_fail}"))
+            elif risk_state == "no_new_positions":
+                checks.append(ReleaseGateCheck(
+                    code="risk:state", status="warn",
+                    message=f"{_msg_risk_state}：{risk_state} — {_msg_risk_warn}"))
+            else:
+                checks.append(ReleaseGateCheck(
+                    code="risk:state", status="pass",
+                    message=f"{_msg_risk_state}：{risk_state}"))
+
+            # ── Summary ────────────────────────────────────────────────────────
+            blocked_reasons: list[str] = []
+
+            def _append_reason(reason: str) -> None:
+                if reason not in blocked_reasons:
+                    blocked_reasons.append(reason)
+
+            # allow_live_shadow logic:
+            allow_live_shadow = True
+            if not database_ok:
+                allow_live_shadow = False
+                _append_reason(f"数据库不可用（{_msg_shadow}=false）")
+            if heartbeat_stale_alerting:
+                allow_live_shadow = False
+                _append_reason(f"心跳超时告警（{_msg_shadow}=false）")
+            if supervisor_alive is False:
+                allow_live_shadow = False
+                _append_reason(f"Supervisor 不可用（{_msg_shadow}=false）")
+            if current_mode == "live_small_auto":
+                allow_live_shadow = False
+                _append_reason("已在 live_small_auto 模式")
+
+            # allow_live_small_auto_dry_run logic:
+            allow_live_small_auto_dry_run = True
+            if not binance_key_present:
+                allow_live_small_auto_dry_run = False
+                _append_reason(f"{_msg_api_key} 未配置（{_msg_dry}=false）")
+            if not binance_secret_present:
+                allow_live_small_auto_dry_run = False
+                _append_reason(f"{_msg_api_secret} 未配置（{_msg_dry}=false）")
+            if not exchanges_yaml_ok:
+                allow_live_small_auto_dry_run = False
+                _append_reason(f"{_msg_exch} 不可用（{_msg_dry}=false）")
+            if risk_state == "unavailable":
+                allow_live_small_auto_dry_run = False
+                _append_reason(f"{_msg_risk_state}不可用（{_msg_dry}=false）")
+            elif risk_state in ("global_pause", "emergency_stop"):
+                allow_live_small_auto_dry_run = False
+                _append_reason(f"{_msg_risk_state}阻止（{risk_state}）")
+            if heartbeat_stale_alerting:
+                allow_live_small_auto_dry_run = False
+                _append_reason(f"心跳超时告警（{_msg_dry}=false）")
+            if not dry_run_transition_guard.allowed:
+                allow_live_small_auto_dry_run = False
+                _append_reason(
+                    f"{_msg_transition}阻断（{_msg_dry}=false）：{dry_run_transition_guard.reason}"
+                )
+
+            return ReleaseGateResponse(
+                generated_at=now_utc.isoformat(),
+                environment=ReleaseGateEnvironment(
+                    database_ok=database_ok,
+                    binance_key_present=binance_key_present,
+                    binance_secret_present=binance_secret_present,
+                    exchanges_yaml_ok=exchanges_yaml_ok,
+                ),
+                control_plane=ReleaseGateControlPlane(
+                    trade_mode=current_mode,
+                    lock_enabled=lock_state.enabled,
+                    execution_route=compute_execution_route(current_mode),
+                    transition_guard_to_live_small_auto=transition_guard.reason,
+                ),
+                risk=ReleaseGateRisk(
+                    resolved_risk_state=risk_info["risk_state"],
+                    day_start_equity=str(risk_info["day_start_equity"]),
+                    current_equity=str(risk_info["current_equity"]),
+                    daily_pnl_pct=str(risk_info["daily_pnl_pct"]),
+                    risk_reason=risk_info["risk_reason"],
+                ),
+                health=ReleaseGateHealth(
+                    supervisor_alive=supervisor_alive,
+                    ingestion_thread_alive=ingestion_thread_alive,
+                    trading_thread_alive=trading_thread_alive,
+                    heartbeat_stale_alerting=heartbeat_stale_alerting,
+                ),
+                checks=checks,
+                summary=ReleaseGateSummary(
+                    allow_live_shadow=allow_live_shadow,
+                    allow_live_small_auto_dry_run=allow_live_small_auto_dry_run,
+                    blocked_reasons=blocked_reasons,
+                ),
+            )
+
+    except Exception:
+        return _fail_closed_release_gate(
+            generated_at=now_utc.isoformat(),
+            blocked_reasons=["API 处理异常（fail-closed，默认阻止）"],
+            database_ok=True,  # we got past init so DB was ok
+        )
+
+
+def _fail_closed_release_gate(
+    generated_at: str,
+    blocked_reasons: list[str],
+    database_ok: bool,
+) -> ReleaseGateResponse:
+    return ReleaseGateResponse(
+        generated_at=generated_at,
+        environment=ReleaseGateEnvironment(
+            database_ok=database_ok,
+            binance_key_present=False,
+            binance_secret_present=False,
+            exchanges_yaml_ok=False,
+        ),
+        control_plane=ReleaseGateControlPlane(
+            trade_mode="paused",
+            lock_enabled=False,
+            execution_route="blocked",
+            transition_guard_to_live_small_auto="blocked: unavailable",
+        ),
+        risk=ReleaseGateRisk(
+            resolved_risk_state="unavailable",
+            day_start_equity="—",
+            current_equity="—",
+            daily_pnl_pct="—",
+            risk_reason="风险数据不可用",
+        ),
+        health=ReleaseGateHealth(
+            supervisor_alive=None,
+            ingestion_thread_alive=None,
+            trading_thread_alive=None,
+            heartbeat_stale_alerting=True,
+        ),
+        checks=[
+            ReleaseGateCheck(
+                code="runtime:unavailable",
+                status="fail",
+                message="后端不可用，请检查数据库和运行时状态",
+            ),
+        ],
+        summary=ReleaseGateSummary(
+            allow_live_shadow=False,
+            allow_live_small_auto_dry_run=False,
+            blocked_reasons=blocked_reasons,
+        ),
+    )
+
+
+def _resolve_risk_info(
+    session_factory: sessionmaker[Session],
+    events_repo: EventsRepository,
+    exec_repo: ExecutionRecordsRepository,
+    candles_repo: CandlesRepository,
+) -> dict:
+    """Resolve full risk info (state + equity numbers) for the release gate.
+
+    Returns a dict with keys: risk_state, day_start_equity, current_equity,
+    daily_pnl_pct, risk_reason.
+    """
+    try:
+        baseline_event = events_repo.get_latest_event_by_type("day_baseline_set")
+        if baseline_event is None:
+            return {
+                "risk_state": "unavailable",
+                "day_start_equity": Decimal("0"),
+                "current_equity": Decimal("0"),
+                "daily_pnl_pct": Decimal("0"),
+                "risk_reason": "缺少今日基线设置事件",
+            }
+        ctx = baseline_event.context_json or {}
+        baseline_date = ctx.get("date")
+        baseline_str = ctx.get("baseline")
+        today_utc = datetime.now(UTC).date()
+        if baseline_str is None or baseline_date != str(today_utc):
+            return {
+                "risk_state": "unavailable",
+                "day_start_equity": Decimal("0"),
+                "current_equity": Decimal("0"),
+                "daily_pnl_pct": Decimal("0"),
+                "risk_reason": "基线日期非今日",
+            }
+        day_start_equity = Decimal(str(baseline_str))
+
+        account = PortfolioAccount(cash_balance=INITIAL_CASH)
+        fills = exec_repo.list_fills_chronological()
+        for fill in fills:
+            pf = PaperFill(
+                symbol=fill.symbol,
+                side=fill.side,
+                price=fill.price,
+                qty=fill.qty,
+                fee_usdt=fill.fee_usdt,
+                slippage_bps=fill.slippage_bps,
+                filled_at=fill.filled_at,
+            )
+            if fill.side == "BUY":
+                account.apply_buy_fill(pf)
+            elif fill.side == "SELL":
+                account.apply_sell_fill(pf)
+
+        market_prices: dict[str, Decimal] = {}
+        for symbol, position in account.positions.items():
+            latest = candles_repo.get_latest(symbol, "15m")
+            if latest is not None:
+                market_prices[symbol] = Decimal(str(latest.close))
+            else:
+                market_prices[symbol] = position.avg_entry_price
+        current_equity = max(account.total_equity(market_prices), Decimal("0"))
+
+        profile = select_risk_profile(current_equity)
+        decision = classify_daily_loss(
+            day_start_equity=day_start_equity,
+            current_equity=current_equity,
+            profile=profile,
+        )
+
+        daily_pnl_pct = (
+            (current_equity - day_start_equity) / day_start_equity * 100
+            if day_start_equity != Decimal("0")
+            else Decimal("0")
+        )
+
+        return {
+            "risk_state": decision.risk_state,
+            "day_start_equity": day_start_equity,
+            "current_equity": current_equity,
+            "daily_pnl_pct": daily_pnl_pct.quantize(Decimal("0.01")),
+            "risk_reason": decision.reason,
+        }
+    except Exception:
+        return {
+            "risk_state": "unavailable",
+            "day_start_equity": Decimal("0"),
+            "current_equity": Decimal("0"),
+            "daily_pnl_pct": Decimal("0"),
+            "risk_reason": "风险数据解析异常",
+        }
 
 
 @router.post("/runtime/system/exit", response_model=SystemExitResponse)

@@ -75,6 +75,16 @@ curl -s --max-time 5 https://api.binance.com/api/v3/ping
 # Expected: {}  (or timeout if restricted network — paper-safe works without it via mock data)
 ```
 
+### 1.7 Structured Gate Output (JSON)
+
+`scripts/release_gate_live.sh` supports `--format json` for machine consumption:
+
+```bash
+./scripts/release_gate_live.sh --format json --output /tmp/gate.json
+```
+
+The JSON output is self-contained and fail-closed: if any critical dependency is unavailable, `summary.pass=false` and `summary.blocked_reasons` contains human-readable descriptions. See `generated_at`, `summary`, `checks[]`, and `runtime_snapshot` fields in the output.
+
 ---
 
 ## 2. Runtime Inspection
