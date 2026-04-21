@@ -101,6 +101,9 @@ class HardStopRule(ExitRule):
         stop_price = position_avg_entry * (
             Decimal("1") - config.hard_stop_atr_mult * atr / position_avg_entry
         )
+        # Guard: if ATR is so large that stop_price <= 0, skip (would wipe position)
+        if stop_price <= 0:
+            return None
         if market_price <= stop_price:
             return ExitSignal(
                 symbol=symbol,
