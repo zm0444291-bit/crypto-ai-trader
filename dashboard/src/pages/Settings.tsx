@@ -115,16 +115,32 @@ export default function Settings() {
         modeReason || undefined,
         liveSymbol,
       );
-      // Prefer blocked_reason for failures; fall back to guard_reason.
-      const feedbackMsg = !res.success && res.blocked_reason
-        ? `blocked: ${res.blocked_reason}`
-        : res.guard_reason;
-      setModeFeedback({ success: res.success, message: feedbackMsg });
       if (res.success) {
+        setModeFeedback({ success: true, message: `已切换至 ${modeValue}` });
         setModeReason('');
         setAllowLiveUnlock(false);
         setModeDirty(false);
         await refreshControlPlane();
+      } else {
+        // Build detailed failure message from blocked_reason + preflight_checks
+        const parts: string[] = [];
+        if (res.blocked_reason) {
+          parts.push(`阻断: ${res.blocked_reason}`);
+        } else if (res.guard_reason) {
+          parts.push(res.guard_reason);
+        }
+        if (res.preflight_checks?.length) {
+          const failed = res.preflight_checks.filter((c) => c.status === 'fail');
+          if (failed.length) {
+            parts.push(
+              ...failed.map((c) => `[${c.code}] ${c.message}`),
+            );
+          }
+        }
+        setModeFeedback({
+          success: false,
+          message: parts.join(' | ') || '模式切换失败',
+        });
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : '未知错误';

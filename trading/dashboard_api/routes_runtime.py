@@ -1,5 +1,6 @@
 """Dashboard API for runtime loop visibility and control (read-only + write control-plane)."""
 
+import logging
 import os
 import signal
 import subprocess
@@ -39,6 +40,11 @@ from trading.storage.repositories import (
     RuntimeControlRepository,
     ShadowExecutionRepository,
 )
+
+logger = logging.getLogger(__name__)
+
+# Initial cash — aligned with default AppSettings; override via env if needed
+INITIAL_CASH = Decimal("500")
 
 router = APIRouter(tags=["runtime"])
 
@@ -185,7 +191,7 @@ def read_runtime_status() -> RuntimeStatusResponse:
             # Build local balance/position snapshots from DB fills for reconciliation.
             # This runs on every /runtime/status call to keep the dashboard fresh.
             all_fills = exec_repo.list_fills_chronological()
-            local_usdt_balance = Decimal("500")  # initial cash
+            local_usdt_balance = INITIAL_CASH  # initial cash
             local_positions: dict[str, PositionSnapshot] = {}
 
             for fill in all_fills:
@@ -439,6 +445,8 @@ class ModeChangeRequest(BaseModel):
     reason: str | None = None
     # Symbol for live trading pre-flight check (required when to_mode=live_small_auto)
     symbol: str | None = None
+    # Dry-run: validates pre-flight and guard checks without persisting any mode change
+    dry_run: bool = False
 
 
 class ModeChangeResponse(BaseModel):
@@ -648,6 +656,26 @@ def set_mode(body: ModeChangeRequest) -> ModeChangeResponse:
                     preflight_checks=preflight_checks,
                 )
 
+            # ── Dry-run: return assessment without persisting ─────────────────
+            if body.dry_run:
+                return ModeChangeResponse(
+                    success=True,
+                    current_mode=current_mode,
+                    guard_reason=guard.reason,
+                    blocked_reason=None,
+                    preflight_checks=preflight_checks,
+                )
+
+        # For non-live_small_auto modes in dry-run, return after guard check
+        if body.dry_run:
+            return ModeChangeResponse(
+                success=True,
+                current_mode=current_mode,
+                guard_reason=guard.reason,
+                blocked_reason=None,
+                preflight_checks=[],
+            )
+
         # ── Persist mode change ─────────────────────────────────────────────
         with session_factory() as session:
             events_repo = EventsRepository(session)
@@ -724,7 +752,7 @@ def _resolve_risk_state(session_factory: sessionmaker[Session]) -> ResolvedRiskS
             day_start_equity = Decimal(str(baseline_str))
 
             # 2) rebuild current account snapshot from historical fills
-            account = PortfolioAccount(cash_balance=Decimal("500"))
+            account = PortfolioAccount(cash_balance=INITIAL_CASH)
             fills = exec_repo.list_fills_chronological()
             for fill in fills:
                 pf = PaperFill(

@@ -211,9 +211,9 @@ export async function setControlPlaneMode(
     body: JSON.stringify({ to_mode: mode, allow_live_unlock: allowLiveUnlock, reason, symbol }),
   });
   const data = await res.json() as ModeChangeResponse | { detail: string };
-  if (!res.ok || (('success' in data) && !data.success)) {
-    const msg = 'detail' in data ? data.detail : (data as ModeChangeResponse).guard_reason;
-    throw new Error(msg);
+  // Return full response even on failure — caller handles blocked_reason/preflight_checks display
+  if (!res.ok) {
+    throw new Error('detail' in data ? data.detail : `API ${res.status}`);
   }
   return data as ModeChangeResponse;
 }

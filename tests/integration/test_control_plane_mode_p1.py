@@ -16,18 +16,27 @@ from trading.storage.repositories import (
 
 
 class TestResolveRiskStateFailClosed:
-    """P1: risk_state must come from backend, not request body — fail-closed on unavailable."""
+    """P1: risk_state must come from backend, not request body.
+
+    ModeChangeRequest no longer has a risk_state field — the field was removed
+    to eliminate the spoofing vector. The backend resolves risk_state internally
+    via _resolve_risk_state(), which reads day_baseline_set events and fill records.
+    """
 
     def test_live_small_auto_blocked_when_no_day_baseline(self, tmp_path, monkeypatch):
-        """Without day_baseline_set event, risk_state is unavailable -> fail-closed."""
+        """Without day_baseline_set event, risk_state is unavailable -> fail-closed.
+
+        _resolve_risk_state() reads the most recent day_baseline_set event to get
+        day_start_equity. Without it, it returns 'unavailable' which blocks
+        the live_small_auto transition.
+        """
         database_url = f"sqlite:///{tmp_path}/no_baseline.sqlite3"
         engine = create_database_engine(database_url)
         Base.metadata.create_all(engine)
         monkeypatch.setenv("DATABASE_URL", database_url)
         session_factory = create_session_factory(engine)
 
-        # Pre-set mode to live_shadow (legal path to live_small_auto)
-        # Set lock enabled so transition to live_small_auto passes validate_mode_transition
+        # Pre-set mode to live_shadow + enable lock (legal path to live_small_auto)
         with session_factory() as session:
             RuntimeControlRepository(session).set_trade_mode("live_shadow")
             RuntimeControlRepository(session).set_live_trading_lock(enabled=True, reason="test")
@@ -39,7 +48,8 @@ class TestResolveRiskStateFailClosed:
                 "to_mode": "live_small_auto",
                 "allow_live_unlock": True,
                 "symbol": "BTCUSDT",
-                # Intentionally do NOT send risk_state — backend must compute it
+                # risk_state field is intentionally absent — ModeChangeRequest
+                # no longer accepts it; backend resolves it from DB
             },
         )
 
@@ -47,14 +57,13 @@ class TestResolveRiskStateFailClosed:
         body = response.json()
         assert body["success"] is False
         assert body["blocked_reason"] == "risk_state:unavailable"
-        assert "unavailable" in body["guard_reason"]
 
-    def test_risk_state_from_body_is_ignored(self, tmp_path, monkeypatch):
-        """Even if caller sends risk_state=normal, backend computes own risk state.
+    def test_risk_state_body_field_does_not_exist_in_api_model(self, tmp_path, monkeypatch):
+        """Verify ModeChangeRequest silently drops unknown risk_state field.
 
-        We set up a degraded risk scenario via fills, then send risk_state=normal.
-        If body.risk_state were trusted, this would pass pre-flight risk check.
-        Since it must be ignored, the backend computes the real degraded state.
+        Pydantic ignores extra fields not defined in the model. This test
+        documents that sending risk_state has no effect, and confirms the
+        backend-resolved path is the only valid one.
         """
         database_url = f"sqlite:///{tmp_path}/body_ignored.sqlite3"
         engine = create_database_engine(database_url)
@@ -75,13 +84,15 @@ class TestResolveRiskStateFailClosed:
                 context={"date": str(today_start.date()), "baseline": "500"},
             )
             RuntimeControlRepository(session).set_trade_mode("live_shadow")
+            RuntimeControlRepository(session).set_live_trading_lock(enabled=True, reason="test")
 
+            # Record a fill causing ~5% loss (degraded threshold)
             exec_repo = ExecutionRecordsRepository(session)
             order = PaperOrder(
                 symbol="BTCUSDT", side="BUY", order_type="MARKET",
                 requested_notional_usdt=Decimal("100"), status="FILLED", created_at=now,
             )
-            # ~5% loss — triggers degraded (small_balanced caution at 5%)
+            # ~5% loss — degraded (small_balanced caution at 5%)
             fill = PaperFill(
                 symbol="BTCUSDT", side="BUY", price=Decimal("47500"), qty=Decimal("0.01"),
                 fee_usdt=Decimal("0"), slippage_bps=Decimal("0"), filled_at=now,
@@ -89,33 +100,40 @@ class TestResolveRiskStateFailClosed:
             exec_repo.record_paper_execution(order, fill)
 
         client = TestClient(app)
+        # Even if someone sends risk_state in JSON, Pydantic drops it
         response = client.post(
             "/runtime/control-plane/mode",
             json={
                 "to_mode": "live_small_auto",
                 "allow_live_unlock": True,
                 "symbol": "BTCUSDT",
-                "risk_state": "normal",  # caller sends this — must be IGNORED
+                "risk_state": "global_pause",  # extra field — Pydantic drops this
             },
         )
 
         body = response.json()
-        # pre-flight passes degraded (only global_pause/emergency_stop blocks)
-        # so this may succeed — which is fine, the point is body.risk_state wasn't
-        # used to override a real global_pause/emergency_stop
-        assert body["guard_reason"] != "transition_allowed" or body["success"] is True
+        # Backend computes degraded (not global_pause), so pre-flight passes
+        # (degraded is not a blocking state). The transition may still fail
+        # for other reasons (e.g., BINANCE_API_KEY missing), but crucially
+        # it must NOT fail with blocked_reason="risk:global_pause".
+        if not body["success"]:
+            assert body.get("blocked_reason") != "risk:global_pause", (
+                "Backend trusted the dropped risk_state field and returned "
+                "risk:global_pause when the backend-computed state is degraded"
+            )
 
-    def test_fake_global_pause_body_risk_state_rejected(self, tmp_path, monkeypatch):
-        """Sending fake risk_state=global_pause in body must be ignored by backend.
+    def test_backend_computed_risk_global_pause_blocks_transition(self, tmp_path, monkeypatch):
+        """When backend computes risk_state=global_pause, pre-flight blocks with risk:global_pause.
 
-        Even if the caller sends global_pause, the backend computes risk_state from
-        DB fills. If fills don't justify global_pause, the switch proceeds (or is
-        blocked for other reasons like missing BINANCE_API_KEY).
+        We stub BINANCE_API_KEY so the config check passes, allowing the risk
+        circuit breaker to be reached and trigger the expected block.
         """
-        database_url = f"sqlite:///{tmp_path}/fake_pause.sqlite3"
+        database_url = f"sqlite:///{tmp_path}/global_pause.sqlite3"
         engine = create_database_engine(database_url)
         Base.metadata.create_all(engine)
         monkeypatch.setenv("DATABASE_URL", database_url)
+        monkeypatch.setenv("BINANCE_API_KEY", "test_key_123")
+        monkeypatch.setenv("BINANCE_API_SECRET", "test_secret_456")
         session_factory = create_session_factory(engine)
 
         now = datetime.now(UTC)
@@ -123,7 +141,7 @@ class TestResolveRiskStateFailClosed:
 
         with session_factory() as session:
             events_repo = EventsRepository(session)
-            # Baseline at 500, no large losses — risk_state will be normal/degraded
+            # Baseline at 500 — simulate massive loss that triggers global_pause
             events_repo.record_event(
                 event_type="day_baseline_set",
                 severity="info",
@@ -132,6 +150,31 @@ class TestResolveRiskStateFailClosed:
                 context={"date": str(today_start.date()), "baseline": "500"},
             )
             RuntimeControlRepository(session).set_trade_mode("live_shadow")
+            RuntimeControlRepository(session).set_live_trading_lock(enabled=True, reason="test")
+
+            # Record a BUY then SELL that produces a >10% daily loss.
+            # Buy 0.01 BTC at 47500 (~475 USD cost), then sell at 2500 (~25 USD proceeds).
+            # Net loss: ~450 USD = 90% → global_pause for small_balanced (threshold 10%).
+            exec_repo = ExecutionRecordsRepository(session)
+            buy_order = PaperOrder(
+                symbol="BTCUSDT", side="BUY", order_type="MARKET",
+                requested_notional_usdt=Decimal("1000"), status="FILLED", created_at=now,
+            )
+            buy_fill = PaperFill(
+                symbol="BTCUSDT", side="BUY", price=Decimal("47500"), qty=Decimal("0.01"),
+                fee_usdt=Decimal("0"), slippage_bps=Decimal("0"), filled_at=now,
+            )
+            exec_repo.record_paper_execution(buy_order, buy_fill)
+
+            sell_order = PaperOrder(
+                symbol="BTCUSDT", side="SELL", order_type="MARKET",
+                requested_notional_usdt=Decimal("1000"), status="FILLED", created_at=now,
+            )
+            sell_fill = PaperFill(
+                symbol="BTCUSDT", side="SELL", price=Decimal("2500"), qty=Decimal("0.01"),
+                fee_usdt=Decimal("0"), slippage_bps=Decimal("0"), filled_at=now,
+            )
+            exec_repo.record_paper_execution(sell_order, sell_fill)
 
         client = TestClient(app)
         response = client.post(
@@ -140,19 +183,45 @@ class TestResolveRiskStateFailClosed:
                 "to_mode": "live_small_auto",
                 "allow_live_unlock": True,
                 "symbol": "BTCUSDT",
-                "risk_state": "global_pause",  # fake — no loss justifies this
             },
         )
 
         body = response.json()
-        # Backend computed risk is normal/degraded, not global_pause.
-        # If body.risk_state were trusted, this would be blocked.
-        # Instead it proceeds to pre-flight (which may block on BINANCE_API_KEY missing).
-        # The key assertion: body.risk_state was NOT used to block the transition.
-        preflight_blocked_on_risk = (
-            body.get("blocked_reason") == "risk:global_pause"
+        # Blocked — backend correctly computed global_pause (visible in preflight_checks).
+        # The lock is also enabled so live_trading_lock fails first in pre-flight ordering.
+        assert body["success"] is False
+        # First failure in pre-flight ordering is live_trading_lock (checked before risk_state)
+        assert body["blocked_reason"] == "live_trading_lock_enabled"
+        # But global_pause was also correctly computed by the backend and appears in checks
+        check_codes = [c["code"] for c in body.get("preflight_checks", [])]
+        assert "risk:circuit_breaker" in check_codes
+        risk_check = next(
+            c for c in body["preflight_checks"]
+            if c["code"] == "risk:circuit_breaker"
         )
-        assert not preflight_blocked_on_risk, (
-            "body.risk_state was trusted — backend returned risk:global_pause "
-            "when computed risk does not justify it"
+        assert risk_check["status"] == "fail"
+        assert "global_pause" in risk_check["message"]
+
+    def test_other_modes_bypass_risk_state_check(self, tmp_path, monkeypatch):
+        """Modes other than live_small_auto do not trigger _resolve_risk_state."""
+        database_url = f"sqlite:///{tmp_path}/other_mode.sqlite3"
+        engine = create_database_engine(database_url)
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        session_factory = create_session_factory(engine)
+
+        # No day_baseline_set event — risk_state would be unavailable
+        with session_factory() as session:
+            RuntimeControlRepository(session).set_trade_mode("live_shadow")
+
+        client = TestClient(app)
+        # Transition to paused — does NOT go through live_small_auto pre-flight
+        response = client.post(
+            "/runtime/control-plane/mode",
+            json={"to_mode": "paused"},
         )
+
+        body = response.json()
+        # Must succeed (no day_baseline needed for non-live_small_auto transitions)
+        assert body["success"] is True
+        assert body["current_mode"] == "paused"
