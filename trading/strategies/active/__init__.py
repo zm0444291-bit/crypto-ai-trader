@@ -6,6 +6,7 @@ from trading.strategies.active.portfolio_manager import (
     CandidateRanking,
     PortfolioStrategyManager,
 )
+from trading.strategies.active.strategy_selector import StrategySelector
 from trading.strategies.base import MarketRegime, Signal
 from trading.strategies.factory import StrategyRegistry
 
@@ -17,4 +18,5 @@ __all__ = [
     "PortfolioStrategyManager",
     "Signal",
     "StrategyRegistry",
+    "StrategySelector",
 ]

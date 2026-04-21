@@ -37,6 +37,7 @@ from trading.storage.repositories import (
 from trading.strategies.active.multi_timeframe_momentum import (
     generate_momentum_candidate,
 )
+from trading.strategies.active.strategy_selector import StrategySelector
 from trading.strategies.exits import ExitEngine, ExitSignal
 
 # ── Lifecycle stages ──────────────────────────────────────────────────────────
@@ -291,6 +292,7 @@ def run_paper_cycle(
     session_factory: Callable[[], Session],
     min_notional_usdt: Decimal = Decimal("10"),
     exit_engine: ExitEngine | None = None,
+    strategy_selector: StrategySelector | None = None,
 ) -> CycleResult:
     """Run a full paper trading cycle for one symbol.
 
@@ -409,14 +411,25 @@ def run_paper_cycle(
         features_1h = build_features([_orm_candle_to_data(c) for c in candles_1h])
         features_4h = build_features([_orm_candle_to_data(c) for c in candles_4h])
 
-    # ── Stage 2: strategy candidate ──────────────────────────────────────────
-    candidate = generate_momentum_candidate(
-        symbol=input_data.symbol,
-        features_15m=features_15m,
-        features_1h=features_1h,
-        features_4h=features_4h,
-        now=input_data.now,
-    )
+    # ── Stage 2: strategy candidate (via StrategySelector with regime routing) ────
+    # Default to legacy momentum if no selector provided (backwards compatibility)
+    if strategy_selector is not None:
+        candidate = strategy_selector.select_candidate(
+            symbol=input_data.symbol,
+            features_15m=features_15m,
+            features_1h=features_1h,
+            features_4h=features_4h,
+            now=input_data.now,
+        )
+    else:
+        # Legacy fallback — single momentum strategy (backwards compat only)
+        candidate = generate_momentum_candidate(
+            symbol=input_data.symbol,
+            features_15m=features_15m,
+            features_1h=features_1h,
+            features_4h=features_4h,
+            now=input_data.now,
+        )
 
     if candidate is None:
         finished = events_repo.record_event(
