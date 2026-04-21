@@ -201,18 +201,17 @@ class BacktestEngine:
                 # Look up current bar by index position rather than filtering
                 # by timestamp (which can miss bars due to tz-aware comparison).
                 # df is already sorted by timestamp when loaded from store.
-                df = data[sym]
-                idx_list = df.index[df["timestamp"] == ts].tolist()
+                sym_df: pd.DataFrame = data[sym]
+                idx_list = sym_df.index[sym_df["timestamp"] == ts].tolist()
                 if not idx_list:
                     continue
                 idx = idx_list[0]
-                assert df is not None
-                bar_open = Decimal(str(df.at[idx, "open"]))
-                bar_close = Decimal(str(df.at[idx, "close"]))
+                bar_open = Decimal(str(sym_df.at[idx, "open"]))
+                bar_close = Decimal(str(sym_df.at[idx, "close"]))
 
                 # ── Signal generation ─────────────────────────────────────────
                 # Use all bars up to (and including) this bar for signal
-                bars_up_to_t = df[df["timestamp"] <= ts]
+                bars_up_to_t = sym_df[sym_df["timestamp"] <= ts]
                 try:
                     signals = strategy.generate_signals(sym, bars_up_to_t)
                 except Exception:
@@ -229,9 +228,9 @@ class BacktestEngine:
                             continue
                         # Execute at NEXT bar's open (bar_{t+1}) to avoid look-ahead
                         next_idx = idx + 1
-                        if next_idx >= len(df):
+                        if next_idx >= len(sym_df):
                             continue
-                        next_open = Decimal(str(df.iloc[next_idx]["open"]))
+                        next_open = Decimal(str(sym_df.iloc[next_idx]["open"]))
                         # Convert bps to fraction: 5 bps → 0.0005
                         entry_price = next_open * (Decimal("1") + slip / Decimal("10000"))
                         fee_bps = self.config.fee_bps
@@ -255,16 +254,16 @@ class BacktestEngine:
                                 "entry_price": entry_price,
                                 "qty": qty,
                                 "fee": fee,
-                                "timestamp": df.iloc[next_idx]["timestamp"],
+                                "timestamp": sym_df.iloc[next_idx]["timestamp"],
                             }
                         )
 
                     elif sig.side == "sell" and pos is not None:
                         # ── Exit ─────────────────────────────────────────────
                         next_idx = idx + 1
-                        if next_idx >= len(df):
+                        if next_idx >= len(sym_df):
                             continue
-                        next_open = Decimal(str(df.iloc[next_idx]["open"]))
+                        next_open = Decimal(str(sym_df.iloc[next_idx]["open"]))
                         exit_price = next_open * (Decimal("1") - slip / Decimal("10000"))
                         exit_qty = pos.qty
                         fee = exit_price * exit_qty * self.config.fee_bps / Decimal("10000")
@@ -275,7 +274,7 @@ class BacktestEngine:
                             - fee
                         )
 
-                        is_win = pnl > 0
+                        is_win = pnl > Decimal("0")
                         trades.append(
                             {
                                 "symbol": sym,
@@ -285,7 +284,7 @@ class BacktestEngine:
                                 "fee": fee,
                                 "pnl": pnl,
                                 "is_win": is_win,
-                                "timestamp": df.iloc[next_idx]["timestamp"],
+                                "timestamp": sym_df.iloc[next_idx]["timestamp"],
                             }
                         )
                         portfolio.cash_balance += gross

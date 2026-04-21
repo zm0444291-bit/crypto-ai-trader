@@ -66,9 +66,17 @@ def test_portfolio_status_rejects_negative_initial_cash():
     assert "initial_cash_usdt" in response.json()["detail"]
 
 
-def test_portfolio_status_without_fills_returns_zero_unrealized_pnl():
-    client = TestClient(app)
+def test_portfolio_status_without_fills_returns_zero_unrealized_pnl(tmp_path, monkeypatch):
+    database_url = f"sqlite:///{tmp_path}/portfolio.sqlite3"
+    monkeypatch.setenv("DATABASE_URL", database_url)
 
+    from trading.main import app
+    from trading.storage.db import Base, create_database_engine
+
+    engine = create_database_engine(database_url)
+    Base.metadata.create_all(engine)
+
+    client = TestClient(app)
     response = client.get(
         "/portfolio/status",
         params={"initial_cash_usdt": "500"},

@@ -108,7 +108,7 @@ class TestBacktestEngine:
         return s
 
     def test_engine_runs_without_error(self, store: ParquetCandleStore):
-        config = BacktestConfig(initial_equity=Decimal("100_000"))
+        config = BacktestConfig(initial_equity=Decimal("100_000"), interval="15m")
         engine = BacktestEngine(config, store)
         strategy = DummyStrategy()
         result = engine.run(
@@ -121,7 +121,7 @@ class TestBacktestEngine:
         assert result.final_equity >= Decimal("0")
 
     def test_equity_curve_starts_at_initial(self, store: ParquetCandleStore):
-        config = BacktestConfig(initial_equity=Decimal("50_000"))
+        config = BacktestConfig(initial_equity=Decimal("50_000"), interval="15m")
         engine = BacktestEngine(config, store)
         strategy = DummyStrategy()
         result = engine.run(
@@ -145,7 +145,7 @@ class TestBacktestEngine:
             )
 
     def test_backtest_result_has_required_fields(self, store: ParquetCandleStore):
-        config = BacktestConfig()
+        config = BacktestConfig(interval="15m")
         engine = BacktestEngine(config, store)
         result = engine.run(
             strategy=DummyStrategy(),

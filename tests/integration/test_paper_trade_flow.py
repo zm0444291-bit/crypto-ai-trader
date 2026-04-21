@@ -37,7 +37,9 @@ def test_candidate_to_paper_fill_to_portfolio_update():
 
     risk_decision = evaluate_pre_trade_risk(candidate, snapshot, profile)
     position_size = calculate_position_size(candidate, risk_decision, profile, Decimal("500"))
-    execution = PaperExecutor(fee_bps=Decimal("10"), slippage_bps=Decimal("0")).execute_market_buy(
+    execution = PaperExecutor(
+        fee_bps=Decimal("10"), slippage_tiers={"default": Decimal("0")}
+    ).execute_market_buy(
         candidate=candidate,
         position_size=position_size,
         market_price=Decimal("100"),
