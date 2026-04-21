@@ -1,12 +1,73 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+>This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
 Local-first AI-assisted cryptocurrency quantitative trading system for **paper trading only** on Binance spot. Live trading is explicitly locked until future milestones implement and review required safety features.
 
 **Default settings**: 500 USDT initial cash, BTCUSDT/ETHUSDT/SOLUSDT, 15m candles, 300s cycle intervals.
+
+---
+
+## 开发计划（v3）
+
+完整开发计划在 `docs/superpowers/plans/2026-04-21-v3-final-plan.md`。所有开发工作必须按该计划执行，每个 Stage 完成后必须通过对应的 **Review Checklist** 才能合并到 main 分支。
+
+### Stage 依赖图（关键路径）
+
+```
+Stage 0 → Stage 1 → Stage 2/2b → Stage 5 → Stage 3 → Stage 9 → Stage 10
+                          ↓
+              可并行: Stage 4, Stage 6, Stage 7, Stage 8
+```
+
+### Stage 清单
+
+| Stage | 名称 | 主要交付物 | 关键文件/目录 |
+|-------|------|-----------|-------------|
+| 0 | 安全修复 | 敏感信息扫描 + DB 事务加固 | `scripts/scan_secrets.py`, `trading/storage/` |
+| 1 | 退出策略 100% | ExitEngine 重构，YAML 配置化 | `trading/strategies/exits/`, `config/exit_strategies.yaml` |
+| 2 | 回测框架 + 因子库 | BacktestEngine + 10+ 因子 | `trading/backtest/`, `trading/features/` |
+| 2b | 数据迁移 + Schema | 新增字段迁移脚本 | `scripts/migrate_*.py`, `trading/storage/models.py` |
+| 3 | 策略多元化 | 3 种策略 + 状态机 | `trading/strategies/`, `trading/strategies/factory.py` |
+| 4 | Dashboard WebSocket | 实时数据推送 | `trading/dashboard_api/ws_manager.py`, `dashboard/src/` |
+| 5 | 风控链路 100% | 风控引擎完善 + 冻结机制 | `trading/risk/`, `trading/execution/gate.py` |
+| 6 | 通知系统 100% | 审批流 + 通知队列 | `trading/notifications/` |
+| 7 | 24/7 运维体系 | AutoHealer + RestartLoopDetector + structured logging | `trading/runtime/healer.py`, `trading/logging/`, `scripts/macos_launchd_runtime.sh` |
+| 8 | 测试 100% + 文档 | 覆盖率 ≥ 85%，用户手册 | `tests/`, `docs/user-manual.md`, `docs/runbook-*.md` |
+| 9 | 实盘解锁评审 | 12 项前置条件 + 压力测试 | `docs/live-trading-readiness-report.md` |
+| 10 | 实盘灰度 | 小资金实盘（小 < 100 USDT） | `config/live-minimal.yaml`, `trading/runtime/state.py` |
+
+### 代码审查机制（CR）
+
+每个 Stage 的 PR 必须通过以下审查：
+
+- **CR-1 自动化检查**：类型检查（mypy --strict）+ 代码风格（ruff）+ 单元测试 + 覆盖率门控
+- **CR-2 Human Review**：Owner 逐项检查 Review Checklist（逻辑正确性、边界情况、风险评估）
+- **CR-3 覆盖率门控**：核心模块 ≥ 95%，高风险 ≥ 90%，中等 ≥ 85%，辅助 ≥ 80%
+
+### PR 标题格式
+
+```
+[Stage-N] 任务描述
+例: [Stage-1] 退出策略 YAML 配置化
+```
+
+### 覆盖率要求
+
+| 模块 | 覆盖率要求 |
+|------|-----------|
+| `trading/execution/` | ≥ 95% |
+| `trading/risk/` | ≥ 95% |
+| `trading/strategies/exits/` | ≥ 95% |
+| `trading/runtime/paper_cycle.py` | ≥ 95% |
+| `trading/notifications/approval/` | ≥ 90% |
+| `trading/runtime/healer/` | ≥ 90% |
+| `trading/features/` | ≥ 85% |
+| 项目整体 | ≥ 85% |
+
+---
 
 ## Architecture
 

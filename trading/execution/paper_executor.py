@@ -1,3 +1,9 @@
+"""Paper executor with tiered slippage simulation.
+
+Slippage is configured per-symbol in config/execution.yaml (slippage_tiers).
+Each tier is in basis points (bps). slippage = quantity * tier_bps / 10000
+"""
+
 from datetime import datetime
 from decimal import Decimal
 from typing import Literal
@@ -6,6 +12,15 @@ from pydantic import BaseModel
 
 from trading.risk.position_sizing import PositionSizeResult
 from trading.strategies.base import TradeCandidate
+
+# Slippage tiers in basis points (bps), keyed by symbol.
+# Must match config/execution.yaml slippage_tiers.
+SLIPPAGE_TIERS: dict[str, Decimal] = {
+    "BTCUSDT": Decimal("5"),
+    "ETHUSDT": Decimal("10"),
+    "SOLUSDT": Decimal("25"),
+    "default": Decimal("15"),
+}
 
 
 class PaperOrder(BaseModel):
@@ -38,19 +53,24 @@ class PaperExecutor:
     def __init__(
         self,
         fee_bps: Decimal = Decimal("10"),
-        slippage_bps: Decimal = Decimal("0"),
+        slippage_tiers: dict[str, Decimal] | None = None,
     ) -> None:
         self.fee_bps = fee_bps
-        self.slippage_bps = slippage_bps
+        self.slippage_tiers = slippage_tiers if slippage_tiers is not None else SLIPPAGE_TIERS
+
+    def _slippage_bps(self, symbol: str) -> Decimal:
+        """Return the slippage tier in bps for the given symbol."""
+        return self.slippage_tiers.get(symbol, self.slippage_tiers["default"])
 
     def _apply_slippage(
-        self, price: Decimal, side: Literal["BUY", "SELL"]
+        self, price: Decimal, side: Literal["BUY", "SELL"], symbol: str
     ) -> Decimal:
         """Apply slippage: BUY pays more, SELL receives less."""
+        slippage_bps = self._slippage_bps(symbol)
         if side == "BUY":
-            return price * (Decimal("1") + self.slippage_bps / Decimal("10000"))
+            return price * (Decimal("1") + slippage_bps / Decimal("10000"))
         else:
-            return price * (Decimal("1") - self.slippage_bps / Decimal("10000"))
+            return price * (Decimal("1") - slippage_bps / Decimal("10000"))
 
     def execute_market_buy(
         self,
@@ -75,9 +95,10 @@ class PaperExecutor:
                 reject_reasons=["invalid_market_price"],
             )
 
-        fill_price = self._apply_slippage(market_price, "BUY")
+        fill_price = self._apply_slippage(market_price, "BUY", candidate.symbol)
         fee_usdt = position_size.notional_usdt * self.fee_bps / Decimal("10000")
         qty = (position_size.notional_usdt - fee_usdt) / fill_price
+        slippage_bps = self._slippage_bps(candidate.symbol)
 
         return PaperExecutionResult(
             approved=True,
@@ -95,7 +116,7 @@ class PaperExecutor:
                 price=fill_price,
                 qty=qty,
                 fee_usdt=fee_usdt,
-                slippage_bps=self.slippage_bps,
+                slippage_bps=slippage_bps,
                 filled_at=executed_at,
             ),
             reject_reasons=[],
@@ -125,9 +146,10 @@ class PaperExecutor:
                 reject_reasons=["invalid_market_price"],
             )
 
-        fill_price = self._apply_slippage(market_price, "SELL")
+        fill_price = self._apply_slippage(market_price, "SELL", symbol)
         notional_usdt = qty * fill_price
         fee_usdt = notional_usdt * self.fee_bps / Decimal("10000")
+        slippage_bps = self._slippage_bps(symbol)
 
         return PaperExecutionResult(
             approved=True,
@@ -145,7 +167,7 @@ class PaperExecutor:
                 price=fill_price,
                 qty=qty,
                 fee_usdt=fee_usdt,
-                slippage_bps=self.slippage_bps,
+                slippage_bps=slippage_bps,
                 filled_at=executed_at,
             ),
             reject_reasons=[],

@@ -823,7 +823,7 @@ def run_paper_cycle(
     # ── Stage 7a: shadow execution (live_shadow mode) ────────────────────────
     if gate_decision.route == "shadow":
         simulated_fill_price = market_price * (
-            Decimal("1") + executor.slippage_bps / Decimal("10000")
+            Decimal("1") + executor._slippage_bps(candidate.symbol) / Decimal("10000")
         )
         with session_factory() as shadow_session:
             shadow_repo = ShadowExecutionRepository(shadow_session)
@@ -833,7 +833,7 @@ def run_paper_cycle(
                 planned_notional_usdt=size_result.notional_usdt,
                 reference_price=market_price,
                 simulated_fill_price=simulated_fill_price,
-                simulated_slippage_bps=executor.slippage_bps,
+                simulated_slippage_bps=executor._slippage_bps(candidate.symbol),
                 decision_reason=ai_result.explanation,
                 source_cycle_status="shadow_recorded",
             )
@@ -852,7 +852,7 @@ def run_paper_cycle(
                 "planned_notional_usdt": str(size_result.notional_usdt),
                 "reference_price": str(market_price),
                 "simulated_fill_price": str(simulated_fill_price),
-                "simulated_slippage_bps": str(executor.slippage_bps),
+                "simulated_slippage_bps": str(executor._slippage_bps(candidate.symbol)),
                 "execution_route": gate_decision.route,
             },
             trace_id=trace_id,

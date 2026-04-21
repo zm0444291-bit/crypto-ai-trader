@@ -3,7 +3,7 @@
 import logging
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from threading import Event as ThreadingEvent
 
@@ -15,6 +15,7 @@ from trading.market_data.candle_service import SYMBOLS
 from trading.notifications.base import NotificationContext, NotificationLevel, Notifier
 from trading.notifications.dedup import AlertDeduplicator
 from trading.notifications.log_notifier import LogNotifier
+from trading.notifications.telegram_notifier import TelegramNotifier
 from trading.portfolio.accounting import PortfolioAccount
 from trading.runtime.paper_cycle import CycleInput, CycleResult, run_paper_cycle
 from trading.storage.db import create_database_engine, create_session_factory, init_db
@@ -35,6 +36,195 @@ DEFAULT_MIN_NOTIONAL = Decimal("10")
 
 # Data freshness threshold: a 15m candle is considered stale after this many seconds
 STALE_THRESHOLD_SECONDS = 1800  # 30 minutes
+
+
+# ── API Failure Degradation ───────────────────────────────────────────────────
+
+
+class APIFailureDegradation:
+    """Per-symbol API failure tracker with progressive freeze.
+
+    Tracks market-data and order failures independently per symbol.
+    After the configured number of consecutive failures the symbol is
+    frozen for a cooldown period, during which it is skipped by the
+    trading loop.
+
+    Telegram alerts are sent on freeze events (deduplicated externally).
+    """
+
+    def __init__(
+        self,
+        market_data_freeze_threshold: int = 3,
+        market_data_freeze_minutes: int = 30,
+        order_failure_freeze_threshold: int = 3,
+        order_failure_freeze_minutes: int = 60,
+        telegram_notifier: TelegramNotifier | None = None,
+    ) -> None:
+        self._market_data_freeze_threshold = market_data_freeze_threshold
+        self._market_data_freeze_minutes = market_data_freeze_minutes
+        self._order_failure_freeze_threshold = order_failure_freeze_threshold
+        self._order_failure_freeze_minutes = order_failure_freeze_minutes
+        self._telegram: TelegramNotifier | None = telegram_notifier
+
+        # Failure counters: symbol -> consecutive failure count
+        self._market_data_failures: dict[str, int] = {}
+        self._order_failures: dict[str, int] = {}
+
+        # Freeze state: symbol -> UTC datetime when freeze expires
+        self._market_data_frozen_until: dict[str, datetime] = {}
+        self._order_frozen_until: dict[str, datetime] = {}
+
+    # ── Market-data failure handling ─────────────────────────────────────────
+
+    def handle_market_data_failure(
+        self,
+        symbol: str,
+        now: datetime | None = None,
+    ) -> str:
+        """Record one market-data API failure for *symbol*.
+
+        Returns one of:
+          - "retry"  — failure recorded but symbol not yet frozen
+          - "frozen" — freeze threshold reached; symbol now frozen
+        """
+        if now is None:
+            now = datetime.now(UTC)
+
+        count = self._market_data_failures.get(symbol, 0) + 1
+        self._market_data_failures[symbol] = count
+
+        if count >= self._market_data_freeze_threshold:
+            freeze_minutes = self._market_data_freeze_minutes
+            self._market_data_frozen_until[symbol] = now.replace(
+                microsecond=0
+            ) + timedelta(minutes=freeze_minutes)
+            self._market_data_failures[symbol] = 0  # reset counter after freeze
+            self._send_alert(
+                level="WARNING",
+                title=f"[API] {symbol} market-data frozen",
+                message=(
+                    f"Market-data failures reached {count} for {symbol}. "
+                    f"Trading frozen for {freeze_minutes} min."
+                ),
+                context={"event_type": "market_data_freeze", "symbol": symbol},
+            )
+            return "frozen"
+
+        return "retry"
+
+    # ── Order failure handling ───────────────────────────────────────────────
+
+    def handle_order_failure(
+        self,
+        symbol: str,
+        is_rate_limited: bool = False,
+        now: datetime | None = None,
+    ) -> str:
+        """Record one order API failure for *symbol*.
+
+        Args:
+            symbol: trading symbol
+            is_rate_limited: True when the exchange signalled rate-limiting
+            now: current UTC datetime (defaults to datetime.now(UTC))
+
+        Returns one of:
+          - "retry"  — rate-limited; caller should retry without incrementing
+          - "retry_counted" — non-rate-limit failure recorded, not yet frozen
+          - "frozen" — freeze threshold reached; symbol now frozen
+          - "abort"  — rate-limited failure should NOT be retried this cycle
+        """
+        if now is None:
+            now = datetime.now(UTC)
+
+        # Rate-limited failures never count against the freeze counter;
+        # the caller is expected to back off and retry.
+        if is_rate_limited:
+            return "retry"  # caller backs off; no counter increment
+
+        count = self._order_failures.get(symbol, 0) + 1
+        self._order_failures[symbol] = count
+
+        if count >= self._order_failure_freeze_threshold:
+            freeze_minutes = self._order_failure_freeze_minutes
+            self._order_frozen_until[symbol] = now.replace(
+                microsecond=0
+            ) + timedelta(minutes=freeze_minutes)
+            self._order_failures[symbol] = 0  # reset counter after freeze
+            self._send_alert(
+                level="ERROR",
+                title=f"[API] {symbol} order failures frozen",
+                message=(
+                    f"Order failures reached {count} for {symbol}. "
+                    f"Trading frozen for {freeze_minutes} min."
+                ),
+                context={"event_type": "order_failure_freeze", "symbol": symbol},
+            )
+            return "frozen"
+
+        return "retry_counted"
+
+    # ── Freeze status ───────────────────────────────────────────────────────
+
+    def is_symbol_frozen(self, symbol: str, now: datetime | None = None) -> bool:
+        """Return True when *symbol* is currently in a freeze window."""
+        if now is None:
+            now = datetime.now(UTC)
+
+        # Unfreeze if cooldown has elapsed
+        mkt_until = self._market_data_frozen_until.get(symbol)
+        if mkt_until is not None and now >= mkt_until:
+            del self._market_data_frozen_until[symbol]
+            mkt_until = None
+
+        order_until = self._order_frozen_until.get(symbol)
+        if order_until is not None and now >= order_until:
+            del self._order_frozen_until[symbol]
+            order_until = None
+
+        return mkt_until is not None or order_until is not None
+
+    def market_data_frozen_minutes_remaining(
+        self, symbol: str, now: datetime | None = None
+    ) -> int:
+        """Seconds until market-data freeze expires (0 if not frozen)."""
+        if now is None:
+            now = datetime.now(UTC)
+        until = self._market_data_frozen_until.get(symbol)
+        if until is None or now >= until:
+            return 0
+        return int((until - now).total_seconds())
+
+    def order_frozen_minutes_remaining(
+        self, symbol: str, now: datetime | None = None
+    ) -> int:
+        """Seconds until order freeze expires (0 if not frozen)."""
+        if now is None:
+            now = datetime.now(UTC)
+        until = self._order_frozen_until.get(symbol)
+        if until is None or now >= until:
+            return 0
+        return int((until - now).total_seconds())
+
+    # ── Internal helpers ─────────────────────────────────────────────────────
+
+    def _send_alert(
+        self,
+        level: str,
+        title: str,
+        message: str,
+        context: dict[str, object] | None = None,
+    ) -> None:
+        """Send a Telegram alert if the notifier is configured."""
+        if self._telegram is None:
+            return
+        try:
+            from trading.notifications.base import NotificationContext, NotificationLevel
+
+            notif_level = NotificationLevel(level.lower())
+            ctx: NotificationContext = (context or {}).copy()  # type: ignore[assignment]
+            self._telegram.notify(notif_level, title, message, ctx)
+        except Exception:
+            logger.exception("Failed to send freeze alert for %s", title)
 
 
 def _get_or_create_day_baseline(
@@ -89,7 +279,7 @@ def _build_cycle_inputs(
 
         pf = PaperFill(
             symbol=fill.symbol,
-            side=fill.side,
+            side=fill.side,  # type: ignore[arg-type]
             price=fill.price,
             qty=fill.qty,
             fee_usdt=fill.fee_usdt,
@@ -218,7 +408,7 @@ def run_once(
     if symbols is None:
         symbols = SYMBOLS
 
-    executor = PaperExecutor(fee_bps=fee_bps, slippage_bps=slippage_bps)
+    executor = PaperExecutor(fee_bps=fee_bps, slippage_tiers={"default": slippage_bps, "BTCUSDT": slippage_bps, "ETHUSDT": slippage_bps, "SOLUSDT": slippage_bps})
     exit_engine = ExitEngine()
     now = datetime.now(UTC)
     results: list[CycleResult] = []

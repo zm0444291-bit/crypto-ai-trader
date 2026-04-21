@@ -3,7 +3,12 @@ from decimal import Decimal
 import pytest
 
 from trading.risk.profiles import select_risk_profile
-from trading.risk.state import DailyLossDecision, RiskState, classify_daily_loss
+from trading.risk.state import (
+    ConsecutiveLossTracker,
+    DailyLossDecision,
+    RiskState,
+    classify_daily_loss,
+)
 
 
 class TestClassifyDailyLoss:
@@ -164,3 +169,70 @@ class TestDailyLossDecisionModel:
                 reason="test",
             )
             assert decision.risk_state == state
+
+
+class TestConsecutiveLossTracker:
+    """VA-0.3.1 / VA-0.3.2 / VA-0.3.3"""
+
+    def test_record_loss_increments(self):
+        tracker = ConsecutiveLossTracker()
+        tracker.record_loss("BTCUSDT")
+        assert tracker.get_consecutive_losses("BTCUSDT") == 1
+        tracker.record_loss("BTCUSDT")
+        assert tracker.get_consecutive_losses("BTCUSDT") == 2
+
+    def test_record_win_resets_target_only(self):
+        tracker = ConsecutiveLossTracker()
+        tracker.record_loss("BTCUSDT")
+        tracker.record_loss("BTCUSDT")
+        tracker.record_loss("ETHUSDT")
+        assert tracker.get_consecutive_losses("BTCUSDT") == 2
+        assert tracker.get_consecutive_losses("ETHUSDT") == 1
+
+        tracker.record_win("BTCUSDT")
+        assert tracker.get_consecutive_losses("BTCUSDT") == 0
+        assert tracker.get_consecutive_losses("ETHUSDT") == 1  # unaffected
+
+    def test_btc_loss_does_not_affect_eth(self):
+        tracker = ConsecutiveLossTracker()
+        for _ in range(3):
+            tracker.record_loss("BTCUSDT")
+        assert tracker.get_consecutive_losses("BTCUSDT") == 3
+        assert tracker.get_consecutive_losses("ETHUSDT") == 0
+
+    def test_get_consecutive_losses_unknown_symbol_returns_zero(self):
+        tracker = ConsecutiveLossTracker()
+        assert tracker.get_consecutive_losses("SOLUSDT") == 0
+
+    def test_to_dict(self):
+        tracker = ConsecutiveLossTracker()
+        tracker.record_loss("BTCUSDT")
+        tracker.record_loss("BTCUSDT")
+        tracker.record_loss("ETHUSDT")
+        d = tracker.to_dict()
+        assert d["BTCUSDT"] == 2
+        assert d["ETHUSDT"] == 1
+
+    def test_from_dict_roundtrip(self):
+        tracker = ConsecutiveLossTracker()
+        tracker.record_loss("BTCUSDT")
+        tracker.record_loss("BTCUSDT")
+        tracker.record_loss("ETHUSDT")
+
+        d = tracker.to_dict()
+        restored = ConsecutiveLossTracker.from_dict(d)
+
+        assert restored.get_consecutive_losses("BTCUSDT") == 2
+        assert restored.get_consecutive_losses("ETHUSDT") == 1
+
+    def test_from_dict_empty(self):
+        restored = ConsecutiveLossTracker.from_dict({})
+        assert restored.get_consecutive_losses("BTCUSDT") == 0
+
+    def test_from_dict_legacy_format_ignored(self):
+        """Legacy tracker stored a plain integer; from_dict should not crash."""
+        legacy = {"": 5}  # old global-int format
+        restored = ConsecutiveLossTracker.from_dict(legacy)
+        # Should start fresh — legacy data ignored
+        assert restored.get_consecutive_losses("BTCUSDT") == 0
+        assert restored.get_consecutive_losses("ETHUSDT") == 0
