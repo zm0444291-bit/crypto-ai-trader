@@ -6,7 +6,7 @@ Execution uses next-bar-open pricing to avoid look-ahead bias.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +16,13 @@ from trading.portfolio.accounting import PortfolioAccount, Position
 
 if TYPE_CHECKING:
     from trading.backtest.store import ParquetCandleStore
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    """Return a UTC-aware datetime, localising naive datetimes to UTC."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 @dataclass
@@ -38,7 +45,8 @@ class BacktestConfig:
     fee_bps: Decimal = field(default=Decimal("10"))
     slippages: dict[str, Decimal] = field(default_factory=lambda: {"default": Decimal("0")})
     initial_equity: Decimal = field(default=Decimal("100_000"))
-    risk_per_trade_pct: Decimal = field(default=Decimal("0.02"))
+    risk_per_trade_pct: Decimal = field(default=Decimal("2"))
+    interval: str = field(default="1h")
 
 
 @dataclass
@@ -89,8 +97,10 @@ class BacktestResult:
     sharpe_ratio: float
     max_drawdown_pct: Decimal
     win_rate: Decimal
-    avg_win_loss_ratio: Decimal
     total_trades: int
+    avg_win_loss_ratio: Decimal
+    avg_win: Decimal = Decimal(0)
+    avg_loss: Decimal = Decimal(0)
     monthly_returns: dict[str, Decimal] = field(default_factory=dict)
     equity_curve: list[tuple[datetime, Decimal]] = field(default_factory=list)
     trades: list[dict[str, Any]] = field(default_factory=list)
@@ -154,12 +164,17 @@ class BacktestEngine:
         equity = initial_equity if initial_equity is not None else self.config.initial_equity
 
         # ── 1. Load data ──────────────────────────────────────────────────────
+        # Normalise query times to UTC-aware so they can compare with tz-aware
+        # DataFrame timestamps without a TypeError.
+        _start = _ensure_utc(start_time)
+        _end = _ensure_utc(end_time)
+
         data: dict[str, pd.DataFrame] = {}
         for sym in symbols:
-            df = self.store.load(sym, "15m")
+            df = self.store.load(sym, self.config.interval)
             if df is None or df.empty:
                 continue
-            df = df[(df["timestamp"] >= start_time) & (df["timestamp"] <= end_time)]
+            df = df[(df["timestamp"] >= _start) & (df["timestamp"] <= _end)]
             if not df.empty:
                 data[sym] = df
 
@@ -180,19 +195,20 @@ class BacktestEngine:
 
         # ── 4. Iterate bars ──────────────────────────────────────────────────
         for _i, ts in enumerate(timeline):
-            # Record equity before processing this bar
-            total_val = self._portfolio_value(portfolio, positions, data)
             for sym in symbols:
                 if sym not in data:
                     continue
+                # Look up current bar by index position rather than filtering
+                # by timestamp (which can miss bars due to tz-aware comparison).
+                # df is already sorted by timestamp when loaded from store.
                 df = data[sym]
-                bar_row = df[df["timestamp"] == ts]
-                if bar_row.empty:
+                idx_list = df.index[df["timestamp"] == ts].tolist()
+                if not idx_list:
                     continue
-
-                # Current bar OHLCV
-                open_ = Decimal(str(bar_row["open"].iloc[0]))
-                close = Decimal(str(bar_row["close"].iloc[0]))
+                idx = idx_list[0]
+                assert df is not None
+                bar_open = Decimal(str(df.at[idx, "open"]))
+                bar_close = Decimal(str(df.at[idx, "close"]))
 
                 # ── Signal generation ─────────────────────────────────────────
                 # Use all bars up to (and including) this bar for signal
@@ -202,53 +218,64 @@ class BacktestEngine:
                 except Exception:
                     signals = []
 
-                for sig in signals:
+            for sig in signals:
                     pos = positions.get(sym)
                     slip = self._slippage(sym)
 
                     if sig.side == "buy" and pos is None:
                         # ── Entry ────────────────────────────────────────────
-                        entry_price = open_ * (Decimal("1") + slip)
-                        fee = entry_price * sig.qty * self.config.fee_bps / Decimal("10000")
-                        cost = entry_price * sig.qty + fee
-
-                        if cost > portfolio.cash_balance:
-                            continue  # insufficient capital
-
+                        notional = portfolio.cash_balance * Decimal("0.95")
+                        if notional <= Decimal("0"):
+                            continue
+                        # Execute at NEXT bar's open (bar_{t+1}) to avoid look-ahead
+                        next_idx = idx + 1
+                        if next_idx >= len(df):
+                            continue
+                        next_open = Decimal(str(df.iloc[next_idx]["open"]))
+                        # Convert bps to fraction: 5 bps → 0.0005
+                        entry_price = next_open * (Decimal("1") + slip / Decimal("10000"))
+                        fee_bps = self.config.fee_bps
+                        qty = notional / entry_price
+                        fee = entry_price * qty * fee_bps / Decimal("10000")
+                        cost = entry_price * qty + fee
                         portfolio.cash_balance -= cost
                         positions[sym] = Position(
                             symbol=sym,
-                            qty=sig.qty,
+                            qty=qty,
                             avg_entry_price=entry_price,
                             fees_paid_usdt=fee,
                             opened_at=ts,
                             entry_atr=getattr(sig, "entry_atr", None),
                         )
+
                         trades.append(
                             {
                                 "symbol": sym,
                                 "side": "buy",
                                 "entry_price": entry_price,
-                                "qty": sig.qty,
+                                "qty": qty,
                                 "fee": fee,
-                                "timestamp": ts,
+                                "timestamp": df.iloc[next_idx]["timestamp"],
                             }
                         )
 
                     elif sig.side == "sell" and pos is not None:
                         # ── Exit ─────────────────────────────────────────────
-                        exit_price = close * (Decimal("1") - slip)
-                        exit_qty = min(sig.qty, pos.qty)
+                        next_idx = idx + 1
+                        if next_idx >= len(df):
+                            continue
+                        next_open = Decimal(str(df.iloc[next_idx]["open"]))
+                        exit_price = next_open * (Decimal("1") - slip / Decimal("10000"))
+                        exit_qty = pos.qty
                         fee = exit_price * exit_qty * self.config.fee_bps / Decimal("10000")
                         gross = exit_price * exit_qty - fee
-
                         pnl = (
                             (exit_price - pos.avg_entry_price) * exit_qty
                             - pos.fees_paid_usdt
                             - fee
                         )
-                        is_win = pnl > 0
 
+                        is_win = pnl > 0
                         trades.append(
                             {
                                 "symbol": sym,
@@ -258,18 +285,15 @@ class BacktestEngine:
                                 "fee": fee,
                                 "pnl": pnl,
                                 "is_win": is_win,
-                                "timestamp": ts,
+                                "timestamp": df.iloc[next_idx]["timestamp"],
                             }
                         )
-
                         portfolio.cash_balance += gross
-                        if exit_qty >= pos.qty:
-                            del positions[sym]
-                        else:
-                            pos.qty -= exit_qty
+
+                        del positions[sym]
 
             # End of bar: record equity (positions reflect this bar's close)
-            total_val = self._portfolio_value(portfolio, positions, data)
+            total_val = self._portfolio_value(portfolio, positions, data, at_ts=ts)
             equity_curve.append((ts, total_val))
 
         # ── 5. Close open positions at final bar close ────────────────────────
@@ -278,12 +302,9 @@ class BacktestEngine:
             if sym not in data:
                 continue
             df = data[sym]
-            last_bar = df[df["timestamp"] == final_ts]
-            if last_bar.empty:
-                continue
-            close_price = Decimal(str(last_bar["close"].iloc[0]))
+            close_price = Decimal(str(df.iloc[-1]["close"]))
             slip = self._slippage(sym)
-            exit_price = close_price * (Decimal("1") - slip)
+            exit_price = close_price * (Decimal("1") - slip / Decimal("10000"))
             fee = exit_price * pos.qty * self.config.fee_bps / Decimal("10000")
             gross = exit_price * pos.qty - fee
             pnl = (exit_price - pos.avg_entry_price) * pos.qty - pos.fees_paid_usdt - fee
@@ -335,8 +356,10 @@ class BacktestEngine:
             sharpe_ratio=sharpe,
             max_drawdown_pct=max_dd,
             win_rate=win_rate,
-            avg_win_loss_ratio=avg_wl,
             total_trades=total_trades,
+            avg_win_loss_ratio=avg_wl,
+            avg_win=avg_win,
+            avg_loss=avg_loss,
             monthly_returns=monthly,
             equity_curve=equity_curve,
             trades=trades,
@@ -351,13 +374,28 @@ class BacktestEngine:
         portfolio: PortfolioAccount,
         positions: dict[str, Position],
         data: dict[str, pd.DataFrame],
+        at_ts: datetime | None = None,
     ) -> Decimal:
-        """Compute current portfolio total value."""
+        """Compute current portfolio total value.
+
+        If at_ts is provided, positions are valued at the close price of that
+        timestamp; otherwise iloc[-1] is used (useful for final-stats computation
+        when ts is no longer in scope).
+        """
         cash = portfolio.cash_balance
         pos_value = Decimal(0)
         for sym, pos in positions.items():
             if sym in data and not data[sym].empty:
-                last_close = Decimal(str(data[sym]["close"].iloc[-1]))
+                df = data[sym]
+                if at_ts is not None:
+                    # Value position at the close of bar matching at_ts
+                    rows = df[df["timestamp"] == at_ts]
+                    if not rows.empty:
+                        last_close = Decimal(str(rows["close"].iloc[0]))
+                    else:
+                        last_close = Decimal(str(df["close"].iloc[-1]))
+                else:
+                    last_close = Decimal(str(df["close"].iloc[-1]))
                 pos_value += pos.qty * last_close
         return cash + pos_value
 
