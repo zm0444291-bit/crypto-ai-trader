@@ -174,7 +174,7 @@ class BacktestEngine:
             df = self.store.load(sym, self.config.interval)
             if df is None or df.empty:
                 continue
-            df = df[(df["timestamp"] >= _start) & (df["timestamp"] <= _end)]
+            df = df[(df["timestamp"] >= _start) & (df["timestamp"] <= _end)].reset_index(drop=True)
             if not df.empty:
                 data[sym] = df
 
