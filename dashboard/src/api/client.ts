@@ -49,6 +49,16 @@ export interface OrderSummary {
   created_at: string;
 }
 
+export interface OrderLifecycleSummary {
+  window_hours: number;
+  total_orders: number;
+  pending_unknown_count: number;
+  failed_count: number;
+  rejected_count: number;
+  status_counts: Record<string, number>;
+  latest_order_time: string | null;
+}
+
 export interface EventsSummary {
   id: number;
   event_type: string;
@@ -178,6 +188,10 @@ export async function getPortfolioStatus(
 
 export async function getRecentOrders(): Promise<{ orders: OrderSummary[] }> {
   return apiFetch<{ orders: OrderSummary[] }>('/orders/recent');
+}
+
+export async function getOrderLifecycleSummary(): Promise<OrderLifecycleSummary> {
+  return apiFetch<OrderLifecycleSummary>('/orders/lifecycle/summary');
 }
 
 export async function getRecentEvents(opts?: {

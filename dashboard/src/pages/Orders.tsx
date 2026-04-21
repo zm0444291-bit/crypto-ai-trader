@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
-import { getRecentOrders, type OrderSummary } from '../api/client';
+import {
+  getOrderLifecycleSummary,
+  getRecentOrders,
+  type OrderLifecycleSummary,
+  type OrderSummary,
+} from '../api/client';
 import { fmtNum, fmtTime } from '../lib';
 
 interface OrderAggregate {
@@ -11,18 +16,29 @@ interface OrderAggregate {
 
 export default function Orders() {
   const [orders, setOrders] = useState<OrderSummary[]>([]);
+  const [lifecycle, setLifecycle] = useState<OrderLifecycleSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  const [summaryFailed, setSummaryFailed] = useState(false);
 
   const fetchOrders = () => {
-    getRecentOrders()
-      .then((r) => {
-        setOrders(r.orders);
-        setFailed(false);
-      })
-      .catch(() => {
-        setFailed(true);
-        setOrders([]);
+    Promise.allSettled([getRecentOrders(), getOrderLifecycleSummary()])
+      .then(([ordersRes, summaryRes]) => {
+        if (ordersRes.status === 'fulfilled') {
+          setOrders(ordersRes.value.orders);
+          setFailed(false);
+        } else {
+          setFailed(true);
+          setOrders([]);
+        }
+
+        if (summaryRes.status === 'fulfilled') {
+          setLifecycle(summaryRes.value);
+          setSummaryFailed(false);
+        } else {
+          setSummaryFailed(true);
+          setLifecycle(null);
+        }
       })
       .finally(() => setLoading(false));
   };
@@ -77,6 +93,35 @@ export default function Orders() {
           <span className="agg-label">最近 24 小时 — 名义金额</span>
           <span className="agg-value">${fmtNum(aggregates.notional24h)}</span>
         </div>
+      </div>
+
+      <div className="section">
+        <div className="section-header">
+          <span className="section-title">订单生命周期监控</span>
+          {summaryFailed && <span className="placeholder-tag">摘要离线</span>}
+        </div>
+        {lifecycle === null ? (
+          <div className="empty-state">摘要不可用，保留订单明细。</div>
+        ) : (
+          <div className="aggregate-bar">
+            <div className="agg-item">
+              <span className="agg-label">{`最近 ${lifecycle.window_hours} 小时总单数`}</span>
+              <span className="agg-value">{lifecycle.total_orders}</span>
+            </div>
+            <div className="agg-item">
+              <span className="agg-label">PENDING_UNKNOWN</span>
+              <span className="agg-value">{lifecycle.pending_unknown_count}</span>
+            </div>
+            <div className="agg-item">
+              <span className="agg-label">FAILED</span>
+              <span className="agg-value">{lifecycle.failed_count}</span>
+            </div>
+            <div className="agg-item">
+              <span className="agg-label">REJECTED</span>
+              <span className="agg-value">{lifecycle.rejected_count}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="section">
