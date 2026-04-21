@@ -154,6 +154,12 @@ Creates `data/crypto_ai_trader.sqlite3` (SQLite) and runs all migrations. Safe t
 
 Open two terminal tabs:
 
+**One-command local start + healthcheck (recommended):**
+```bash
+./scripts/start_local_stack.sh
+```
+This starts backend + dashboard (if not running), checks `/health`, `/runtime/status`, `/runtime/control-plane`, `/runtime/release-gate/live`, and opens the dashboard automatically.
+
 **Tab 1 — Backend API + Dashboard (concurrent):**
 ```bash
 make backend   # FastAPI on http://127.0.0.1:8000

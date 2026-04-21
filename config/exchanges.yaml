@@ -1,12 +1,12 @@
 exchanges:
   binance:
-    enabled: true
-    default_market_type: spot
-    live_trading_enabled: false
     allowed_symbols:
-      - BTCUSDT
-      - ETHUSDT
-      - SOLUSDT
+    - BTCUSDT
+    - ETHUSDT
+    - SOLUSDT
+    default_market_type: spot
     disabled_products:
-      - futures
-      - margin
+    - futures
+    - margin
+    enabled: true
+    live_trading_enabled: false
