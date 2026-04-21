@@ -9,8 +9,8 @@
 | Stage 0 | ✅ completed | 2026-04-21 | Agent | reports/stage-0-security.md |
 | Stage 1 | ✅ completed | 2026-04-22 | Agent | — |
 | Stage 2 | ✅ completed | 2026-04-22 | Agent | — |
-| Stage 2b | pending | — | — | — |
-| Stage 3 | pending | — | — | — |
+| Stage 2b | ✅ completed | 2026-04-22 | Agent+Main | — |
+| Stage 3 | ✅ completed | 2026-04-22 | Agent+Main | — |
 | Stage 4a | pending | — | — | — |
 | Stage 4b | pending | — | — | — |
 | Stage 5 | pending | — | — | — |
