@@ -974,3 +974,4 @@ class TestComponentRestartStrategy:
                 assert "component" in e["context"], f"{event_type} missing component"
                 assert "attempt" in e["context"], f"{event_type} missing attempt"
                 assert "reason" in e["context"], f"{event_type} missing reason"
+

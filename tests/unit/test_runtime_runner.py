@@ -690,3 +690,119 @@ class TestDataFreshness:
         assert len(inputs) == 1
         assert inputs[0].open_positions == 0
         assert inputs[0].current_position is None
+
+
+    def test_portfolio_account_buy_sell_reconstruction_cash_correct(self):
+        """BUY then SELL reconstruction leaves zero position and correct cash.
+        Realized PnL is net of both buy and sell fees."""
+        from datetime import UTC, datetime
+        from decimal import Decimal
+
+        from trading.execution.paper_executor import PaperFill
+        from trading.portfolio.accounting import PortfolioAccount
+
+        initial_cash = Decimal("500")
+        account = PortfolioAccount(cash_balance=initial_cash)
+
+        # BUY 1 BTC @ 100, fee 0.1
+        buy = PaperFill(
+            symbol="BTCUSDT",
+            side="BUY",
+            price=Decimal("100"),
+            qty=Decimal("1"),
+            fee_usdt=Decimal("0.1"),
+            slippage_bps=Decimal("0"),
+            filled_at=datetime.now(UTC),
+        )
+        account.apply_buy_fill(buy)
+
+        # SELL 1 BTC @ 110, fee 0.1 — fully closes position
+        sell = PaperFill(
+            symbol="BTCUSDT",
+            side="SELL",
+            price=Decimal("110"),
+            qty=Decimal("1"),
+            fee_usdt=Decimal("0.1"),
+            slippage_bps=Decimal("0"),
+            filled_at=datetime.now(UTC),
+        )
+        account.apply_sell_fill(sell)
+
+        # Position must be fully closed
+        assert "BTCUSDT" not in account.positions
+        # Cash: 500 - 100.1 + 109.9 = 509.8
+        assert account.cash_balance == Decimal("509.8")
+        # Realized PnL: (110-100) - 0.1 - 0.1 = 9.8
+        assert account.realized_pnl_total_usdt == Decimal("9.8")
+
+    def test_dedup_instance_persists_across_run_once_calls(self):
+        """Dedup suppresses repeat cycle_error notifications across cycles."""
+        from datetime import UTC, datetime
+        from decimal import Decimal
+        from unittest.mock import MagicMock, patch
+
+        from trading.notifications.dedup import AlertDeduplicator
+        from trading.runtime.runner import run_once
+
+        dedup = AlertDeduplicator(window_seconds=300)
+        session_factory = make_session_factory()
+
+        notifications_sent: list = []
+
+        class FakeNotifier:
+            def notify(self, level, title, message, context=None):
+                notifications_sent.append(message)
+
+        fake_inputs = [
+            MagicMock(
+                symbol="BTCUSDT",
+                now=datetime.now(UTC),
+                day_start_equity=Decimal("500"),
+                account_equity=Decimal("500"),
+                market_prices={"BTCUSDT": Decimal("50000")},
+                total_position_pct=Decimal("0"),
+                symbol_position_pct=Decimal("0"),
+                open_positions=0,
+                daily_order_count=0,
+                symbol_daily_trade_count=0,
+                consecutive_losses=0,
+                data_is_fresh=True,
+                kill_switch_enabled=False,
+                current_position=None,
+            )
+        ]
+
+        def fake_cycle_error(*args, **kwargs):
+            raise RuntimeError("simulated error")
+
+        # First call: exception fires, notification should be sent
+        with patch("trading.runtime.runner.run_paper_cycle", side_effect=fake_cycle_error):
+            with patch("trading.runtime.runner._build_cycle_inputs", return_value=fake_inputs):
+                with patch("trading.runtime.runner.EventsRepository"):
+                    run_once(
+                        session_factory=session_factory,
+                        ai_scorer=FakeAIScorer(),
+                        symbols=["BTCUSDT"],
+                        initial_cash_usdt=Decimal("500"),
+                        notifier=FakeNotifier(),
+                        deduplicator=dedup,
+                    )
+
+        assert len(notifications_sent) == 1
+
+        # Second call with SAME dedup: same error should be suppressed
+        with patch("trading.runtime.runner.run_paper_cycle", side_effect=fake_cycle_error):
+            with patch("trading.runtime.runner._build_cycle_inputs", return_value=fake_inputs):
+                with patch("trading.runtime.runner.EventsRepository"):
+                    run_once(
+                        session_factory=session_factory,
+                        ai_scorer=FakeAIScorer(),
+                        symbols=["BTCUSDT"],
+                        initial_cash_usdt=Decimal("500"),
+                        notifier=FakeNotifier(),
+                        deduplicator=dedup,
+                    )
+
+        # DB events are written both times; notification suppressed on second call
+        assert len(notifications_sent) == 1
+

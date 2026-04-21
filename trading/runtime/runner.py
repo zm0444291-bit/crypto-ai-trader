@@ -33,6 +33,9 @@ DEFAULT_FEE_BPS = Decimal("10")
 DEFAULT_SLIPPAGE_BPS = Decimal("0")
 DEFAULT_MIN_NOTIONAL = Decimal("10")
 
+# Data freshness threshold: a 15m candle is considered stale after this many seconds
+STALE_THRESHOLD_SECONDS = 1800  # 30 minutes
+
 
 def _get_or_create_day_baseline(
     session: Session, now: datetime, current_equity: Decimal
@@ -108,13 +111,12 @@ def _build_cycle_inputs(
             latest_candles[symbol] = latest
 
     # Determine data freshness: fresh if latest 15m candle is within 30 minutes
-    _STALE_THRESHOLD_SECONDS = 1800  # 30 min for 15m candles
     latest_ts = next((c.open_time for c in latest_candles.values()), None)
     if latest_ts is not None:
         # Normalize naive datetime to aware UTC before subtraction
         if latest_ts.tzinfo is None:
             latest_ts = latest_ts.replace(tzinfo=UTC)
-        data_is_fresh = (now - latest_ts).total_seconds() < _STALE_THRESHOLD_SECONDS
+        data_is_fresh = (now - latest_ts).total_seconds() < STALE_THRESHOLD_SECONDS
     else:
         data_is_fresh = False
 
@@ -222,6 +224,7 @@ def run_once(
     results: list[CycleResult] = []
     notify = notifier or LogNotifier()
     dedup = deduplicator or AlertDeduplicator(window_seconds=300)
+    # run_loop always passes a live instance; fallback for direct run_once callers
 
     with session_factory() as session:
         events_repo = EventsRepository(session)

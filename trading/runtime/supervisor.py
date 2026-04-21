@@ -400,7 +400,7 @@ def run_supervisor(
                         _record_restart_event(
                             "component_restart_attempted",
                             component,
-                            state["restart_count"] + 1,
+                            state["restart_count"],
                             "cooldown before restart",
                             cooldown_active=True,
                         )
@@ -443,6 +443,7 @@ def run_supervisor(
                     max_cycles=max_cycles,
                     stop_event=stop,
                     notifier=notify,
+                    deduplicator=dedup,
                 )
                 # Normal exit — loop completed successfully
                 if is_retry:
@@ -475,7 +476,7 @@ def run_supervisor(
                         _record_restart_event(
                             "component_restart_attempted",
                             component,
-                            state["restart_count"] + 1,
+                            state["restart_count"],
                             "cooldown before restart",
                             cooldown_active=True,
                         )
