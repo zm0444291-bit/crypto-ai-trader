@@ -593,6 +593,7 @@ def test_live_shadow_route_records_shadow_and_does_not_execute_paper_order():
 
     executor = MagicMock()
     executor.slippage_bps = Decimal("0")
+    executor._slippage_bps.return_value = Decimal("0")
 
     events_repo = FakeEventsRepo()
     exec_repo = FakeExecRepo()

@@ -182,6 +182,7 @@ def _run_exit_scan(
         position_qty=position.qty,
         position_avg_entry=position.avg_entry_price,
         position_stop=position.stop_reference,
+        position_entry_atr=position.entry_atr,
         market_price=market_price,
         current_time=input_data.now,
         position_opened_at=position.opened_at or input_data.now,

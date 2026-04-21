@@ -5,12 +5,33 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
+from pathlib import Path
+from typing import Any
 
 
 class ExitReason(StrEnum):
     HARD_STOP = "hard_stop"
     TAKE_PROFIT = "take_profit"
     TIME_EXIT = "time_exit"
+    MANUAL = "manual"
+
+
+# Default ATR used when position has no entry_atr
+DEFAULT_ATR = Decimal("100")
+
+
+@dataclass
+class ExitConfig:
+    """Configuration for all exit rules.
+
+    All ATR multipliers are expressed as raw multipliers (e.g. 2.0 = 2x ATR).
+    All percentage fields are expressed as decimals (e.g. 0.5 = 50%).
+    """
+
+    hard_stop_atr_mult: Decimal = field(default=Decimal("2"))
+    take_profit_atr_mult: Decimal = field(default=Decimal("3"))
+    max_hold_hours: int = field(default=24)
+    time_exit_pct: Decimal = field(default=Decimal("0.5"))  # fraction of position to exit
 
 
 @dataclass
@@ -19,11 +40,22 @@ class ExitSignal:
 
     symbol: str
     reason: ExitReason
-    exit_price: Decimal
+    exit_price: Decimal  # market price at signal generation (for immediate execution)
     qty_to_exit: Decimal  # Decimal; may be less than full position for partial exits
     created_at: datetime
     confidence: Decimal = field(default=Decimal("1.0"))  # 0..1
     message: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "reason": self.reason.value,
+            "exit_price": str(self.exit_price),
+            "qty_to_exit": str(self.qty_to_exit),
+            "created_at": self.created_at.isoformat(),
+            "confidence": str(self.confidence),
+            "message": self.message,
+        }
 
 
 class ExitRule(ABC):
@@ -35,127 +67,143 @@ class ExitRule(ABC):
         symbol: str,
         position_qty: Decimal,
         position_avg_entry: Decimal,
+        position_entry_atr: Decimal | None,
         market_price: Decimal,
         current_time: datetime,
-        position_opened_at: datetime,
+        position_opened_at: datetime | None,
+        config: ExitConfig,
     ) -> ExitSignal | None:
         """Return an ExitSignal if this rule triggers, else None."""
         ...
 
 
 class HardStopRule(ExitRule):
-    """Exit when price falls below stop_reference (ATR-based stop)."""
+    """Exit when price falls below the ATR-based stop level.
 
-    def __init__(
-        self,
-        stop_reference: Decimal | None = None,
-        atr_multiplier: Decimal = Decimal("2"),
-    ) -> None:
-        self.stop_reference = stop_reference  # if None, uses position's stored stop
-        self.atr_multiplier = atr_multiplier
+    stop_price = entry_price * (1 - atr_mult * atr / entry_price)
+    Triggers when market_price <= stop_price.
+    """
 
     def evaluate(
         self,
         symbol: str,
         position_qty: Decimal,
         position_avg_entry: Decimal,
+        position_entry_atr: Decimal | None,
         market_price: Decimal,
         current_time: datetime,
-        position_opened_at: datetime,
+        position_opened_at: datetime | None,
+        config: ExitConfig,
     ) -> ExitSignal | None:
-        if self.stop_reference is None:
-            return None  # caller must provide via ExitEngine config
-        if market_price <= self.stop_reference:
+        if position_avg_entry <= 0:
+            return None
+        atr = position_entry_atr if position_entry_atr is not None else DEFAULT_ATR
+        stop_price = position_avg_entry * (
+            Decimal("1") - config.hard_stop_atr_mult * atr / position_avg_entry
+        )
+        if market_price <= stop_price:
             return ExitSignal(
                 symbol=symbol,
                 reason=ExitReason.HARD_STOP,
-                exit_price=self.stop_reference,
+                exit_price=market_price,
                 qty_to_exit=position_qty,
                 confidence=Decimal("1.0"),
                 created_at=current_time,
-                message=f"Hard stop triggered: market={market_price} <= stop={self.stop_reference}",
+                message=f"Hard stop: {market_price} <= {stop_price:.4f}",
             )
         return None
 
 
 class TakeProfitRule(ExitRule):
-    """Exit when price rises above a target."""
+    """Exit when price rises above the ATR-based profit target.
 
-    def __init__(self, target_price: Decimal | None = None) -> None:
-        self.target_price = target_price
+    tp_price = entry_price * (1 + atr_mult * atr / entry_price)
+    Triggers when market_price >= tp_price.
+    """
 
     def evaluate(
         self,
         symbol: str,
         position_qty: Decimal,
         position_avg_entry: Decimal,
+        position_entry_atr: Decimal | None,
         market_price: Decimal,
         current_time: datetime,
-        position_opened_at: datetime,
+        position_opened_at: datetime | None,
+        config: ExitConfig,
     ) -> ExitSignal | None:
-        if self.target_price is None:
+        if position_avg_entry <= 0:
             return None
-        if market_price >= self.target_price:
+        atr = position_entry_atr if position_entry_atr is not None else DEFAULT_ATR
+        tp_price = position_avg_entry * (
+            Decimal("1") + config.take_profit_atr_mult * atr / position_avg_entry
+        )
+        if market_price >= tp_price:
             return ExitSignal(
                 symbol=symbol,
                 reason=ExitReason.TAKE_PROFIT,
-                exit_price=self.target_price,
+                exit_price=market_price,
                 qty_to_exit=position_qty,
                 confidence=Decimal("1.0"),
                 created_at=current_time,
-                message=(
-                    f"Take profit triggered: market={market_price} >= target={self.target_price}"
-                ),
+                message=f"Take profit: {market_price} >= {tp_price:.4f}",
             )
         return None
 
 
 class TimeExitRule(ExitRule):
-    """Exit after a maximum holding period."""
-
-    def __init__(self, max_hours: int = 24) -> None:
-        self.max_hours = max_hours
+    """Exit after a maximum holding period — always partial (config.time_exit_pct)."""
 
     def evaluate(
         self,
         symbol: str,
         position_qty: Decimal,
         position_avg_entry: Decimal,
+        position_entry_atr: Decimal | None,
         market_price: Decimal,
         current_time: datetime,
-        position_opened_at: datetime,
+        position_opened_at: datetime | None,
+        config: ExitConfig,
     ) -> ExitSignal | None:
-        if position_opened_at is None:
+        if position_opened_at is None or config.max_hold_hours <= 0:
             return None
         elapsed = current_time - position_opened_at
-        if elapsed.total_seconds() >= self.max_hours * 3600:
+        if elapsed.total_seconds() >= config.max_hold_hours * 3600:
             return ExitSignal(
                 symbol=symbol,
                 reason=ExitReason.TIME_EXIT,
                 exit_price=market_price,
-                qty_to_exit=position_qty,
+                qty_to_exit=position_qty * config.time_exit_pct,
                 confidence=Decimal("0.8"),
                 created_at=current_time,
                 message=(
-                    f"Time exit triggered: held {elapsed.total_seconds() / 3600:.1f}h"
-                    f" > {self.max_hours}h"
+                    f"Time exit: held {elapsed.total_seconds() / 3600:.1f}h"
+                    f" > {config.max_hold_hours}h,"
+                    f" exiting {float(config.time_exit_pct) * 100:.0f}%"
                 ),
             )
         return None
 
 
-class ExitEngine:
-    """Evaluates all exit rules against a position and returns the best signal."""
+# Priority map: lower number = higher priority
+_EXIT_PRIORITY = {
+    ExitReason.HARD_STOP: 0,
+    ExitReason.TAKE_PROFIT: 1,
+    ExitReason.TIME_EXIT: 2,
+    ExitReason.MANUAL: -1,  # manual always wins if present
+}
 
-    def __init__(
-        self,
-        hard_stop_reference: Decimal | None = None,
-        take_profit_pct: Decimal = Decimal("5"),  # % above entry
-        max_hours: int = 24,
-    ) -> None:
-        self.hard_stop_reference = hard_stop_reference
-        self.take_profit_pct = take_profit_pct
-        self.max_hours = max_hours
+
+class ExitEngine:
+    """Evaluates all exit rules and returns the highest-priority triggered signal."""
+
+    def __init__(self, config: ExitConfig) -> None:
+        self.config = config
+        self._rules: list[ExitRule] = [
+            HardStopRule(),
+            TakeProfitRule(),
+            TimeExitRule(),
+        ]
 
     def evaluate(
         self,
@@ -163,37 +211,84 @@ class ExitEngine:
         position_qty: Decimal,
         position_avg_entry: Decimal,
         position_stop: Decimal | None,
+        position_entry_atr: Decimal | None,
         market_price: Decimal,
         current_time: datetime,
-        position_opened_at: datetime,
+        position_opened_at: datetime | None,
     ) -> ExitSignal | None:
-        """Evaluate all rules; return the first triggered exit signal, or None."""
-        rules: list[ExitRule] = []
+        """Evaluate all rules; return the highest-priority triggered signal, or None.
 
-        # Hard stop: use position's own stop if provided, else engine default
-        stop_ref = position_stop if position_stop is not None else self.hard_stop_reference
-        if stop_ref is not None:
-            rules.append(HardStopRule(stop_reference=stop_ref))
+        When multiple rules trigger simultaneously, priority is:
+            HARD_STOP(0) < TAKE_PROFIT(1) < TIME_EXIT(2) < MANUAL(-1)
+        """
+        if position_qty <= 0:
+            return None
 
-        # Take profit
-        if self.take_profit_pct != 0 and position_avg_entry != 0:
-            tp_target = position_avg_entry * (Decimal("1") + self.take_profit_pct / Decimal("100"))
-            rules.append(TakeProfitRule(target_price=tp_target))
-
-        # Time exit
-        if self.max_hours > 0:
-            rules.append(TimeExitRule(max_hours=self.max_hours))
-
-        for rule in rules:
-            signal = rule.evaluate(
+        signals: list[ExitSignal] = []
+        for rule in self._rules:
+            sig = rule.evaluate(
                 symbol=symbol,
                 position_qty=position_qty,
                 position_avg_entry=position_avg_entry,
+                position_entry_atr=position_entry_atr,
                 market_price=market_price,
                 current_time=current_time,
                 position_opened_at=position_opened_at,
+                config=self.config,
             )
-            if signal is not None:
-                return signal
+            if sig is not None:
+                signals.append(sig)
 
-        return None
+        if not signals:
+            return None
+
+        # Highest priority = lowest _EXIT_PRIORITY number; MANUAL always wins
+        return min(signals, key=lambda s: _EXIT_PRIORITY.get(s.reason, 99))
+
+
+def load_exit_rules_from_yaml(path: str | Path) -> ExitConfig:
+    """Load ExitConfig from a YAML file.
+
+    Args:
+        path: Path to config/exit_rules.yaml
+
+    Returns:
+        ExitConfig with values from YAML; missing fields use defaults.
+
+    Raises:
+        FileNotFoundError: if path does not exist.
+        ValueError: if YAML is malformed.
+    """
+    import yaml
+
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Exit rules config not found: {path}")
+
+    data: dict[str, Any] = yaml.safe_load(p.read_text()) or {}
+    rules = data.get("exit_rules", {})
+
+    def _decimal(value: object, default: str) -> Decimal:
+        if value is None:
+            return Decimal(default)
+        return Decimal(str(value))
+
+    def _int(value: object, default: int) -> int:
+        if value is None:
+            return default
+        if isinstance(value, int):
+            return value
+        return int(str(value))
+
+    return ExitConfig(
+        hard_stop_atr_mult=_decimal(
+            rules.get("hard_stop", {}).get("atr_multiplier"), "2.0"
+        ),
+        take_profit_atr_mult=_decimal(
+            rules.get("take_profit", {}).get("atr_multiplier"), "3.0"
+        ),
+        max_hold_hours=_int(rules.get("time_exit", {}).get("max_hold_hours"), 24),
+        time_exit_pct=_decimal(
+            rules.get("time_exit", {}).get("partial_exit_pct"), "0.5"
+        ),
+    )

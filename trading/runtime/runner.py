@@ -5,6 +5,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from threading import Event as ThreadingEvent
 
 from sqlalchemy.orm import Session
@@ -25,7 +26,10 @@ from trading.storage.repositories import (
     EventsRepository,
     ExecutionRecordsRepository,
 )
-from trading.strategies.exits import ExitEngine
+from trading.strategies.exits import ExitEngine, load_exit_rules_from_yaml
+
+# Derive config directory relative to this file (project_root / config)
+_CONFIG_DIR = Path(__file__).parent.parent.parent / "config"
 
 logger = logging.getLogger(__name__)
 
@@ -408,8 +412,16 @@ def run_once(
     if symbols is None:
         symbols = SYMBOLS
 
-    executor = PaperExecutor(fee_bps=fee_bps, slippage_tiers={"default": slippage_bps, "BTCUSDT": slippage_bps, "ETHUSDT": slippage_bps, "SOLUSDT": slippage_bps})
-    exit_engine = ExitEngine()
+    executor = PaperExecutor(
+        fee_bps=fee_bps,
+        slippage_tiers={
+            "default": slippage_bps,
+            "BTCUSDT": slippage_bps,
+            "ETHUSDT": slippage_bps,
+            "SOLUSDT": slippage_bps,
+        },
+    )
+    exit_engine = ExitEngine(config=load_exit_rules_from_yaml(_CONFIG_DIR / "exit_rules.yaml"))
     now = datetime.now(UTC)
     results: list[CycleResult] = []
     notify = notifier or LogNotifier()
