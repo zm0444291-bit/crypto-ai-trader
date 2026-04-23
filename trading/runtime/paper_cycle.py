@@ -13,10 +13,13 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from trading.market_data.adapters.base import BidAskQuote
     from trading.market_data.schemas import CandleData
 
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+
+from trading.market_data.adapters.base import BidAskQuote
 
 from trading.ai.scorer import AIScorer
 from trading.execution.gate import ExecutionGate
@@ -122,6 +125,9 @@ class CycleInput(BaseModel):
     day_start_equity: Decimal
     account_equity: Decimal
     market_prices: dict[str, Decimal]
+    # Optional real-time bid/ask quotes for precise execution pricing.
+    # When provided, execution uses bid/ask instead of mid price.
+    bid_ask_quotes: dict[str, "BidAskQuote"] | None = None
     total_position_pct: Decimal
     symbol_position_pct: Decimal
     open_positions: int
@@ -179,6 +185,13 @@ def _run_exit_scan(
     market_price = input_data.market_prices.get(input_data.symbol)
     if market_price is None:
         return None, False, event_ids
+
+    # Use bid/ask quote for execution when available, otherwise fall back to mid
+    exec_price: BidAskQuote | Decimal = (
+        input_data.bid_ask_quotes.get(input_data.symbol, market_price)
+        if input_data.bid_ask_quotes is not None
+        else market_price
+    )
 
     # ── exit_evaluated (signal found) ─────────────────────────────────────
     exit_signal = exit_engine.evaluate(
@@ -239,11 +252,11 @@ def _run_exit_scan(
     )
     event_ids.append(exit_gen_ev.id)
 
-    # Execute the sell
+    # Execute the sell — use bid/ask quote for precise pricing
     exec_result = executor.execute_market_sell(
         symbol=input_data.symbol,
         qty=exit_signal.qty_to_exit,
-        market_price=market_price,
+        market_price=exec_price,
         executed_at=input_data.now,
     )
 
@@ -914,10 +927,16 @@ def run_paper_cycle(
         )
 
     # ── Stage 7b: paper execution ─────────────────────────────────────────────
+    # Resolve bid/ask quote for precise execution pricing when available
+    exec_price: BidAskQuote | Decimal = (
+        input_data.bid_ask_quotes.get(input_data.symbol, market_price)
+        if input_data.bid_ask_quotes is not None
+        else market_price
+    )
     exec_result: PaperExecutionResult = executor.execute_market_buy(
         candidate=candidate,
         position_size=size_result,
-        market_price=market_price,
+        market_price=exec_price,
         executed_at=input_data.now,
     )
 

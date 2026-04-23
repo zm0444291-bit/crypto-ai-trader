@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from trading.ai.scorer import AIScorer
 from trading.dashboard_api.ws_manager import broadcast_from_sync
 from trading.execution.paper_executor import PaperExecutor
+from trading.market_data.adapters.base import BidAskQuote, MarketDataAdapter
 from trading.market_data.candle_service import SYMBOLS
 from trading.notifications.base import NotificationContext, NotificationLevel, Notifier
 from trading.notifications.dedup import AlertDeduplicator
@@ -271,11 +272,12 @@ def _build_cycle_inputs(
     symbols: list[str],
     now: datetime,
     initial_cash_usdt: Decimal,
+    adapter: MarketDataAdapter | None = None,
 ) -> tuple[list[CycleInput], Decimal, Decimal]:
     """Build CycleInput for each symbol using live DB state.
 
     Returns:
-        tuple of (inputs list, current account equity, day-start equity).
+        tuple of (inputs list, current account equity, day start equity).
     """
 
     exec_repo = ExecutionRecordsRepository(session)
@@ -309,6 +311,17 @@ def _build_cycle_inputs(
         if latest is not None:
             market_prices[symbol] = Decimal(str(latest.close))
             latest_candles[symbol] = latest
+
+    # Fetch real-time bid/ask quotes when adapter is available
+    bid_ask_quotes: dict[str, "BidAskQuote"] | None = None
+    if adapter is not None:
+        bid_ask_quotes = {}
+        for symbol in symbols:
+            try:
+                quote = adapter.get_bid_ask(symbol)
+                bid_ask_quotes[symbol] = quote
+            except Exception:
+                pass  # Fall back to mid-price via market_prices when quote unavailable
 
     # Determine data freshness: fresh if latest 15m candle is within 30 minutes
     latest_ts = next((c.open_time for c in latest_candles.values()), None)
@@ -385,6 +398,7 @@ def _build_cycle_inputs(
                 day_start_equity=day_start_equity,
                 account_equity=account_equity,
                 market_prices=market_prices,
+                bid_ask_quotes=bid_ask_quotes,
                 total_position_pct=total_position_pct,
                 symbol_position_pct=sym_position_pct,
                 open_positions=len(account.positions),
@@ -410,6 +424,7 @@ def run_once(
     min_notional: Decimal = DEFAULT_MIN_NOTIONAL,
     notifier: Notifier | None = None,
     deduplicator: AlertDeduplicator | None = None,
+    adapter: MarketDataAdapter | None = None,
 ) -> list[CycleResult]:
     """Run one paper trading cycle for all configured symbols.
 
@@ -447,7 +462,7 @@ def run_once(
         )
 
         inputs, account_equity, day_start_equity = _build_cycle_inputs(
-            session, symbols, now, initial_cash_usdt
+            session, symbols, now, initial_cash_usdt, adapter=adapter
         )
 
         for input_data in inputs:
