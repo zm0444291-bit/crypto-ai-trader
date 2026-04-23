@@ -82,7 +82,7 @@ def load_economic_events_from_yaml(path: Path) -> list[EconomicEvent]:
             name = entry.get("name", "Unknown")
             symbols: list[str] = entry.get("symbols", [])
             try:
-                dt = datetime.fromisoformat(date_str).replace(tzinfo=datetime.UTC)
+                dt = datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc)
             except ValueError:
                 raise ValueError(f"Invalid date format in economic_calendar.yaml: {date_str!r}") from None
             events.append(

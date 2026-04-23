@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Attempt to import ib_insync; if not available the module still loads
 # but live IBKR functionality is disabled.
 try:
-    from ib_insync import TWS, Contract, Forex
+    from ib_insync import TWS, Contract, Forex  # type: ignore[import-not-found]
 except ImportError:
     Contract = None
     Forex = None
