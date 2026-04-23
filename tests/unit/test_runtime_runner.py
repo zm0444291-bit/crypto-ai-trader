@@ -79,7 +79,7 @@ class TestRunOnce:
         with patch("trading.runtime.runner.run_paper_cycle", side_effect=fake_cycle):
             with patch(
                 "trading.runtime.runner._build_cycle_inputs",
-                return_value=[],
+                return_value=([], Decimal("500"), Decimal("500")),
             ):
                 with patch("trading.runtime.runner.EventsRepository"):
                     run_once(
@@ -152,7 +152,7 @@ class TestRunOnce:
         with patch("trading.runtime.runner.run_paper_cycle", side_effect=fake_cycle):
             with patch(
                 "trading.runtime.runner._build_cycle_inputs",
-                return_value=fake_inputs,
+                return_value=(fake_inputs, Decimal("500"), Decimal("500")),
             ):
                 with patch("trading.runtime.runner.EventsRepository"):
                     run_once(
@@ -206,7 +206,7 @@ class TestRunOnce:
             )
 
         with patch("trading.runtime.runner.run_paper_cycle", side_effect=fake_cycle):
-            with patch("trading.runtime.runner._build_cycle_inputs", return_value=fake_inputs):
+            with patch("trading.runtime.runner._build_cycle_inputs", return_value=(fake_inputs, Decimal("500"), Decimal("500"))):
                 with patch("trading.runtime.runner.EventsRepository"):
                     run_once(
                         session_factory=session_factory,
@@ -323,7 +323,7 @@ class TestRunLoop:
                 ev.id = 1
                 return ev
 
-        with patch("trading.runtime.runner.run_once", return_value=[]):
+        with patch("trading.runtime.runner.run_once", return_value=([], Decimal("500"), Decimal("500"))):
             with patch(
                 "trading.runtime.runner.time.sleep",
                 side_effect=KeyboardInterrupt,
@@ -777,7 +777,7 @@ class TestDataFreshness:
 
         # First call: exception fires, notification should be sent
         with patch("trading.runtime.runner.run_paper_cycle", side_effect=fake_cycle_error):
-            with patch("trading.runtime.runner._build_cycle_inputs", return_value=fake_inputs):
+            with patch("trading.runtime.runner._build_cycle_inputs", return_value=(fake_inputs, Decimal("500"), Decimal("500"))):
                 with patch("trading.runtime.runner.EventsRepository"):
                     run_once(
                         session_factory=session_factory,
@@ -792,7 +792,7 @@ class TestDataFreshness:
 
         # Second call with SAME dedup: same error should be suppressed
         with patch("trading.runtime.runner.run_paper_cycle", side_effect=fake_cycle_error):
-            with patch("trading.runtime.runner._build_cycle_inputs", return_value=fake_inputs):
+            with patch("trading.runtime.runner._build_cycle_inputs", return_value=(fake_inputs, Decimal("500"), Decimal("500"))):
                 with patch("trading.runtime.runner.EventsRepository"):
                     run_once(
                         session_factory=session_factory,
