@@ -14,7 +14,7 @@ class MarketDataStatus(BaseModel):
 
 # Static configuration for Milestone 1
 # In future milestones, this will be driven by database or dynamic config
-SYMBOLS: list[str] = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+SYMBOLS: list[str] = ["XAUUSD"]
 TIMEFRAMES: list[str] = ["15m", "1h", "4h"]
 
 

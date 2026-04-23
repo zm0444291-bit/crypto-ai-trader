@@ -140,7 +140,7 @@ class StrategySelector:
             return None
 
         latest = features[-1]
-        atr_val: Decimal = latest.atr_14 if latest.atr_14 is not None else Decimal("100")
+        atr_val: Decimal = latest.atr_14 if latest.atr_14 is not None else Decimal("20")
 
         entry_reference = latest.close
         stop_reference = entry_reference - (atr_val * Decimal("2"))

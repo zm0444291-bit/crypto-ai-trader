@@ -29,6 +29,7 @@ from trading.storage.repositories import (
     EventsRepository,
     ExecutionRecordsRepository,
 )
+from trading.strategies.active.strategy_selector import StrategySelector
 from trading.strategies.exits import ExitEngine, load_exit_rules_from_yaml
 
 # Derive config directory relative to this file (project_root / config)
@@ -437,9 +438,8 @@ def run_once(
         fee_bps=fee_bps,
         slippage_tiers={
             "default": slippage_bps,
-            "BTCUSDT": slippage_bps,
-            "ETHUSDT": slippage_bps,
-            "SOLUSDT": slippage_bps,
+            "XAUUSD": slippage_bps,
+            "EURUSD": slippage_bps,
         },
     )
     exit_engine = ExitEngine(config=load_exit_rules_from_yaml(_CONFIG_DIR / "exit_rules.yaml"))
@@ -465,6 +465,8 @@ def run_once(
             session, symbols, now, initial_cash_usdt, adapter=adapter
         )
 
+        strategy_selector = StrategySelector(symbols=symbols)
+
         for input_data in inputs:
             try:
                 result = run_paper_cycle(
@@ -476,6 +478,7 @@ def run_once(
                     session_factory=session_factory,
                     min_notional_usdt=min_notional,
                     exit_engine=exit_engine,
+                    strategy_selector=strategy_selector,
                 )
                 results.append(result)
             except Exception as exc:
