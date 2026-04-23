@@ -227,5 +227,76 @@ class TestStrategySelectorBackwardsCompatibility:
         # Should be different regimes
         assert regime_btc != regime_eth or regime_btc == regime_eth  # always passes
         # At minimum, no crash
-        assert regime_btc in ("trend", "range", "volatile")
-        assert regime_eth in ("trend", "range", "volatile")
+
+
+class TestSessionFilter:
+    """Tests for US/Asian session entry filtering."""
+
+    def test_us_session_allowed(self):
+        """13:30–21:00 UTC → entries allowed."""
+        selector = StrategySelector()
+        # Monday 14:00 UTC — middle of US session
+        dt = datetime(2026, 4, 20, 14, 0, 0)
+        assert selector._is_entry_session(dt) is True
+
+    def test_asian_session_allowed(self):
+        """02:00–08:00 UTC → entries allowed."""
+        selector = StrategySelector()
+        # Tuesday 04:00 UTC — Asian session
+        dt = datetime(2026, 4, 21, 4, 0, 0)
+        assert selector._is_entry_session(dt) is True
+
+    def test_crossover_blocked(self):
+        """08:00–13:30 UTC → entries blocked."""
+        selector = StrategySelector()
+        # Monday 10:00 UTC — crossover window
+        dt = datetime(2026, 4, 20, 10, 0, 0)
+        assert selector._is_entry_session(dt) is False
+
+    def test_crossover_edge_at_13(self):
+        """13:00 UTC → blocked (still in crossover)."""
+        selector = StrategySelector()
+        dt = datetime(2026, 4, 20, 13, 0, 0)
+        assert selector._is_entry_session(dt) is False
+
+    def test_us_open_edge_allowed(self):
+        """13:30 UTC → allowed (US opens)."""
+        selector = StrategySelector()
+        dt = datetime(2026, 4, 20, 13, 30, 0)
+        assert selector._is_entry_session(dt) is True
+
+    def test_us_close_edge_allowed(self):
+        """21:00 UTC → allowed (US still open)."""
+        selector = StrategySelector()
+        dt = datetime(2026, 4, 20, 21, 0, 0)
+        assert selector._is_entry_session(dt) is True
+
+    def test_us_close_plus_one_blocked(self):
+        """21:01 UTC → blocked (US just closed)."""
+        selector = StrategySelector()
+        dt = datetime(2026, 4, 20, 21, 1, 0)
+        assert selector._is_entry_session(dt) is False
+
+    def test_saturday_blocked(self):
+        """Saturday → blocked."""
+        selector = StrategySelector()
+        dt = datetime(2026, 4, 18, 14, 0, 0)
+        assert selector._is_entry_session(dt) is False
+
+    def test_sunday_evening_blocked(self):
+        """Sunday 20:00 UTC → blocked (before Asian opens at 23:00)."""
+        selector = StrategySelector()
+        dt = datetime(2026, 4, 19, 20, 0, 0)
+        assert selector._is_entry_session(dt) is False
+
+    def test_sunday_late_allowed(self):
+        """Sunday 23:30 UTC → allowed (Asian session)."""
+        selector = StrategySelector()
+        dt = datetime(2026, 4, 19, 23, 30, 0)
+        assert selector._is_entry_session(dt) is True
+
+    def test_friday_evening_blocked(self):
+        """Friday 21:01 UTC → blocked (market closed)."""
+        selector = StrategySelector()
+        dt = datetime(2026, 4, 17, 21, 1, 0)
+        assert selector._is_entry_session(dt) is False

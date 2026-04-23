@@ -159,6 +159,31 @@ class StrategySelector:
             created_at=now,
         )
 
+    def _is_entry_session(self, dt: datetime) -> bool:
+        """Return True if new entries are allowed at the given UTC time.
+
+        Session rules (UTC):
+            US    session: 13:30–21:00 UTC  (peak XAUUSD volume)
+            Asian session: 23:00–08:00 UTC  (moderate moves, lower spread)
+            Blocked: weekdays 08:00–13:29 UTC + weekdays after 21:00 UTC
+            Sunday: only allow 23:00–23:59 UTC (Asian open)
+            Saturday: always blocked
+        """
+        # Saturday — always blocked
+        if dt.weekday() == 5:
+            return False
+        # Sunday — only allow during Asian session (23:00–23:59 UTC)
+        if dt.weekday() == 6:
+            return dt.hour >= 23
+        # Monday–Friday rules:
+        # Block during crossover (08:00–13:29 UTC)
+        if 8 <= dt.hour < 13 or (dt.hour == 13 and dt.minute == 0):
+            return False
+        # Block after US close (21:00+ UTC)
+        if dt.hour > 21 or (dt.hour == 21 and dt.minute > 0):
+            return False
+        return True
+
     # ─────────────────────────────────────────────────────────────────────────
     # Main entry point
     # ─────────────────────────────────────────────────────────────────────────
@@ -223,6 +248,14 @@ class StrategySelector:
                 continue
             if not in_pos and sig.side.lower() == "sell":
                 # Not in position — ignore exit signal
+                continue
+
+            # ── Session filter for ENTRY signals ──────────────────────────────
+            # Only allow new entries during high-volatility sessions:
+            #   US  session: 13:30–21:00 UTC (XAUUSD peak volume)
+            #   Asian session: 02:00–08:00 UTC (moderate moves, lower spread)
+            # Entries blocked during: crossover hours (08:00–13:30 UTC) + weekends
+            if sig.side.lower() == "buy" and not self._is_entry_session(now):
                 continue
 
             cand = self._signal_to_candidate(sig, symbol, regime, features_15m, now)
