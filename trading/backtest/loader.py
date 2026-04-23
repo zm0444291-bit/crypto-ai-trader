@@ -6,7 +6,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 import requests
@@ -115,7 +115,7 @@ class BinanceHistoricalLoader:
         end_ms: int,
     ) -> list[list[Any]]:
         """Fetch a single page of klines with retry logic."""
-        params = {
+        params: dict[str, str | int] = {
             "symbol": symbol.upper(),
             "interval": interval,
             "startTime": start_ms,
@@ -127,7 +127,7 @@ class BinanceHistoricalLoader:
             try:
                 resp = requests.get(KLINES_URL, params=params, timeout=30)
                 resp.raise_for_status()
-                return resp.json()
+                return cast(list[list[Any]], resp.json())
             except requests.HTTPError as e:
                 # Rate limit — wait longer
                 if resp.status_code == 429:

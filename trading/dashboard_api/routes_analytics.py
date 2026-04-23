@@ -1,6 +1,6 @@
 """Dashboard API for analytics: equity snapshots, win/loss, daily PnL."""
 
-from datetime import UTC
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException
@@ -97,7 +97,7 @@ def read_analytics_summary(
     # (PortfolioAccount.apply_sell_fill raises NotImplementedError)
     snapshots: list[EquitySnapshot] = []
     cash = initial_cash_usdt
-    positions: dict[str, dict] = {}  # symbol -> {qty, avg_price, cost_basis}
+    positions: dict[str, dict[str, Decimal]] = {}  # symbol -> {qty, avg_price, cost_basis}
     for day in sorted_days:
         day_fills = fills_by_day[day]
         for fill in day_fills:
@@ -133,7 +133,7 @@ def read_analytics_summary(
     day_start_equity = initial_cash_usdt
     if day_start.strftime("%Y-%m-%d") in fills_by_day:
         day_start_cash = initial_cash_usdt
-        day_start_positions: dict[str, dict] = {}
+        day_start_positions: dict[str, dict[str, Decimal]] = {}
         for fill in all_fills:
             fill_day = fill.filled_at.strftime("%Y-%m-%d")
             if fill_day < day_start.strftime("%Y-%m-%d"):
@@ -191,11 +191,11 @@ def read_analytics_summary(
         if total_sell_qty > total_buy_qty:
             continue
         # FIFO: match each SELL fill against oldest BUYs at their average price
-        avg_buy_price = sum(f.price * f.qty for f in buys) / total_buy_qty
-        sell_proceeds = sum(f.price * f.qty - f.fee_usdt for f in sells)
+        avg_buy_price = sum((f.price * f.qty for f in buys), Decimal(0)) / Decimal(total_buy_qty)
+        sell_proceeds = sum((f.price * f.qty - f.fee_usdt for f in sells), Decimal(0))
         buy_cost = total_sell_qty * avg_buy_price
-        buy_fees = sum(f.fee_usdt for f in buys)
-        sell_fees = sum(f.fee_usdt for f in sells)
+        buy_fees = sum((f.fee_usdt for f in buys), Decimal(0))
+        sell_fees = sum((f.fee_usdt for f in sells), Decimal(0))
         pnl = sell_proceeds - buy_cost - buy_fees - sell_fees
         if pnl > 0:
             winning_trades += 1
@@ -242,7 +242,5 @@ def read_analytics_summary(
     )
 
 
-def _utc_now():
-    from datetime import datetime
-
+def _utc_now() -> datetime:
     return datetime.now(UTC)

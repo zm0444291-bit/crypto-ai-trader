@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal, cast
 
 import httpx
 
@@ -26,7 +26,7 @@ from trading.execution.binance_filters import BinanceFilters
 logger = logging.getLogger(__name__)
 
 # Default timeout for Binance API requests: (connect, read) in seconds
-_DEFAULT_TIMEOUT: tuple[float, float] = (5.0, 10.0)
+_DEFAULT_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
 # Binance recvWindow: max time difference between request timestamp and server time
 _RECV_WINDOW_MS = "5000"
@@ -118,7 +118,7 @@ class LiveExecutorConfig:
     allowed_symbols: list[str]
     live_trading_enabled: bool
     base_url: str = "https://api.binance.com"
-    timeout: tuple[float, float] = _DEFAULT_TIMEOUT
+    timeout: float | httpx.Timeout = _DEFAULT_TIMEOUT
 
 
 # ---------------------------------------------------------------------------
@@ -147,16 +147,16 @@ class OrderLifecycle:
         ).hexdigest()
         return {**params, "signature": signature}
 
-    def _query_request(self, params: dict[str, str]) -> dict:
+    def _query_request(self, params: dict[str, str]) -> dict[str, Any]:
         headers = {"X-MBX-APIKEY": self._api_key}
         # Note: we use the base URL from the external client; in tests it is mocked.
         response = self._client.request("GET", "/api/v3/order", headers=headers, params=params)
         response.raise_for_status()
-        return response.json()
+        return cast(dict[str, Any], response.json())
 
     def query_by_client_order_id(
         self, symbol: str, client_order_id: str
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """Query order status by clientOrderId.
 
         Returns the order dict on success, None on any network or HTTP error.
@@ -174,6 +174,7 @@ class OrderLifecycle:
         except (httpx.HTTPStatusError, httpx.RequestError):
             return None
 
+    @staticmethod
     def exchange_status_to_lifecycle_status(exchange_status: str) -> OrderStatus:
         """Convert Binance order status string to OrderStatus."""
         mapping = {
@@ -258,7 +259,7 @@ class LiveExecutor:
         ).hexdigest()
         return {**params, "signature": signature}
 
-    def _request(self, method: str, endpoint: str, params: dict[str, str] | None = None) -> dict:
+    def _request(self, method: str, endpoint: str, params: dict[str, str] | None = None) -> dict[str, Any]:
         """Make an authenticated Binance API request.
 
         Raises:
@@ -273,7 +274,7 @@ class LiveExecutor:
         else:
             response = self._client.request(method, url, headers=headers, data=signed_params)
         response.raise_for_status()
-        return response.json()
+        return cast(dict[str, Any], response.json())
 
     def _apply_filters(
         self,
@@ -384,7 +385,7 @@ class LiveExecutor:
         filled_qty: Decimal | None = None
 
         if fills:
-            filled_qty = sum(Decimal(f["qty"]) for f in fills)
+            filled_qty = sum((Decimal(f["qty"]) for f in fills), Decimal(0))
 
         # Determine terminal status
         order_status_str = result.get("status", "")
@@ -518,7 +519,7 @@ class LiveExecutor:
         # If submit returned PENDING_UNKNOWN (network error on submit),
         # resolve via query-by-client_order_id
         if submit_result.status == OrderStatus.PENDING_UNKNOWN:
-            resolved = self._resolve_pending_unknown(symbol, submit_result.client_order_id)
+            resolved = self._resolve_pending_unknown(symbol, submit_result.client_order_id or "")
             # Carry over client_order_id since resolved result may not have it
             return ExecutionResult(
                 status=resolved.status,
@@ -629,7 +630,7 @@ class LiveExecutor:
             error_message=exec_result.message if not exec_result.success else None,
         )
 
-    def get_order_status(self, symbol: str, order_id: str) -> dict | None:
+    def get_order_status(self, symbol: str, order_id: str) -> dict[str, Any] | None:
         """Query order status from Binance by exchange order ID.
 
         Returns None on any error (network, HTTP, etc.).

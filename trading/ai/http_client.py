@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -63,4 +63,4 @@ class HttpAIScoringClient:
                 headers={"Content-Type": "application/json"},
             )
             resp.raise_for_status()
-            return resp.json()
+            return cast(dict[str, Any], resp.json())

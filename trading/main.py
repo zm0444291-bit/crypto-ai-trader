@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Callable
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -21,7 +22,7 @@ from trading.storage.repositories import EventsRepository
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Start/stop WS managers when FastAPI server starts/shuts down."""
     register_loop(asyncio.get_running_loop())
 
