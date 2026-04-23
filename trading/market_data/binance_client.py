@@ -7,7 +7,7 @@ import httpx
 from trading.market_data.schemas import CandleData
 
 # Default timeout for Binance API requests: (connect, read) in seconds
-_DEFAULT_TIMEOUT = (5.0, 10.0)
+_DEFAULT_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
 
 class BinanceKlineClient:

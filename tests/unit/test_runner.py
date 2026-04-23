@@ -1,8 +1,6 @@
 """Tests for trading/runtime/runner.py — APIFailureDegradation."""
 
-from datetime import datetime, timedelta, UTC
-
-import pytest
+from datetime import UTC, datetime, timedelta
 
 from trading.runtime.runner import APIFailureDegradation
 

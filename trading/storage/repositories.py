@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import asc, desc, func, select
 from sqlalchemy.orm import Session
@@ -135,11 +135,11 @@ class CandlesRepository:
                 )
             else:
                 existing.close_time = candle_data.close_time
-                existing.open = candle_data.open
-                existing.high = candle_data.high
-                existing.low = candle_data.low
-                existing.close = candle_data.close
-                existing.volume = candle_data.volume
+                existing.open = candle_data.open  # type: ignore[assignment]
+                existing.high = candle_data.high  # type: ignore[assignment]
+                existing.low = candle_data.low  # type: ignore[assignment]
+                existing.close = candle_data.close  # type: ignore[assignment]
+                existing.volume = candle_data.volume  # type: ignore[assignment]
                 existing.source = candle_data.source
             affected += 1
 
@@ -223,7 +223,7 @@ class RuntimeControlRepository:
         row = self.session.get(RuntimeControl, "trade_mode")
         if row is None:
             return default
-        return row.value_json.get("mode", default)
+        return cast(TRADE_MODES, row.value_json.get("mode", default))
 
     def set_trade_mode(self, mode: TRADE_MODES) -> None:
         """Persist a trade mode."""

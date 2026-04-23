@@ -6,7 +6,6 @@ from decimal import Decimal
 import pytest
 
 from trading.strategies.exits import (
-    DEFAULT_ATR,
     ExitConfig,
     ExitEngine,
     ExitReason,

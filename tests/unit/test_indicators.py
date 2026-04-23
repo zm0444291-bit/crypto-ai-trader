@@ -6,10 +6,15 @@ import pandas as pd
 import pytest
 
 from trading.features.momentum import (
+    cci,
     macd,
     roc,
-    cci,
     stochastic,
+)
+from trading.features.trend import (
+    adx,
+    aroon,
+    supertrend,
 )
 from trading.features.volatility import (
     bollinger_bands,
@@ -18,11 +23,6 @@ from trading.features.volatility import (
 from trading.features.volume import (
     obv,
     vwap,
-)
-from trading.features.trend import (
-    adx,
-    supertrend,
-    aroon,
 )
 
 

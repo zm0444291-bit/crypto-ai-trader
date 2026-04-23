@@ -1,0 +1,28 @@
+# contracts.yaml
+# XAUUSD and EURUSD contract specifications
+
+XAUUSD:
+  symbol: XAUUSD
+  description: Gold (XAU) vs US Dollar
+  asset_class: commodities
+  contract_size: 100  # oz
+  tick_size: 0.01
+  min_quantity: 0.01
+  max_quantity: 1000
+  margin_required: 1000  # per contract
+  commission: 2.0  # per round turn
+  exchange: ICE
+  currency: USD
+
+EURUSD:
+  symbol: EURUSD
+  description: Euro vs US Dollar
+  asset_class: forex
+  contract_size: 100000  # units (standard lot)
+  tick_size: 0.00001
+  min_quantity: 0.01  # mini lot
+  max_quantity: 5000
+  margin_required: 50  # per lot (approx 2% for 50:1)
+  commission: 5.0  # per round turn (per lot)
+  exchange: IDEALPRO
+  currency: USD

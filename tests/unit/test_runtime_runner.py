@@ -517,7 +517,7 @@ class TestDataFreshness:
                     return_value=self._make_fake_portfolio(),
                 ):
                     # Must not raise TypeError even though naive_ts has no tzinfo
-                    inputs = _build_cycle_inputs(
+                    inputs, _account_equity, _day_start_equity = _build_cycle_inputs(
                         session=MagicMock(),
                         symbols=["BTCUSDT"],
                         now=datetime.now(UTC),
@@ -556,7 +556,7 @@ class TestDataFreshness:
                     "trading.runtime.runner.PortfolioAccount",
                     return_value=self._make_fake_portfolio(),
                 ):
-                    inputs = _build_cycle_inputs(
+                    inputs, _account_equity, _day_start_equity = _build_cycle_inputs(
                         session=MagicMock(),
                         symbols=["BTCUSDT"],
                         now=datetime.now(UTC),
@@ -594,7 +594,7 @@ class TestDataFreshness:
                     "trading.runtime.runner.PortfolioAccount",
                     return_value=self._make_fake_portfolio(),
                 ):
-                    inputs = _build_cycle_inputs(
+                    inputs, _account_equity, _day_start_equity = _build_cycle_inputs(
                         session=MagicMock(),
                         symbols=["BTCUSDT"],
                         now=datetime.now(UTC),
@@ -625,7 +625,7 @@ class TestDataFreshness:
                     "trading.runtime.runner.PortfolioAccount",
                     return_value=self._make_fake_portfolio(),
                 ):
-                    inputs = _build_cycle_inputs(
+                    inputs, _account_equity, _day_start_equity = _build_cycle_inputs(
                         session=MagicMock(),
                         symbols=["BTCUSDT"],
                         now=datetime.now(UTC),
@@ -680,7 +680,7 @@ class TestDataFreshness:
                     "trading.runtime.runner.EventsRepository",
                     return_value=fake_events_repo,
                 ):
-                    inputs = _build_cycle_inputs(
+                    inputs, _account_equity, _day_start_equity = _build_cycle_inputs(
                         session=MagicMock(),
                         symbols=["BTCUSDT"],
                         now=datetime.now(UTC),

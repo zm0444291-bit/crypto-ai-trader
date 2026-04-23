@@ -6,7 +6,7 @@ Execution uses next-bar-open pricing to avoid look-ahead bias.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -21,8 +21,8 @@ if TYPE_CHECKING:
 def _ensure_utc(dt: datetime) -> datetime:
     """Return a UTC-aware datetime, localising naive datetimes to UTC."""
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 @dataclass
@@ -206,23 +206,24 @@ class BacktestEngine:
                 if not idx_list:
                     continue
                 idx = idx_list[0]
-                bar_open = Decimal(str(sym_df.at[idx, "open"]))
-                bar_close = Decimal(str(sym_df.at[idx, "close"]))
 
                 # ── Signal generation ─────────────────────────────────────────
                 # Use all bars up to (and including) this bar for signal
                 bars_up_to_t = sym_df[sym_df["timestamp"] <= ts]
                 try:
-                    signals = strategy.generate_signals(sym, bars_up_to_t)
+                    sig_list = strategy.generate_signals(sym, bars_up_to_t)
+                    # Convert iterator to list so it can be consumed multiple times
+                    signals_for_sym = list(sig_list)
                 except Exception:
-                    signals = []
+                    signals_for_sym = []
 
-            for sig in signals:
-                    pos = positions.get(sym)
-                    slip = self._slippage(sym)
+                # ── Execute signals for this symbol at this bar ──────────────
+                pos = positions.get(sym)
+                slip = self._slippage(sym)
 
+                for sig in signals_for_sym:
                     if sig.side == "buy" and pos is None:
-                        # ── Entry ────────────────────────────────────────────
+                        # ── Entry ──────────────────────────────────────────
                         notional = portfolio.cash_balance * Decimal("0.95")
                         if notional <= Decimal("0"):
                             continue
@@ -257,6 +258,9 @@ class BacktestEngine:
                                 "timestamp": sym_df.iloc[next_idx]["timestamp"],
                             }
                         )
+                        # Position now exists; refresh pos ref for any further
+                        # signals in the same bar so sell signals see it too.
+                        pos = positions.get(sym)
 
                     elif sig.side == "sell" and pos is not None:
                         # ── Exit ─────────────────────────────────────────────
@@ -290,6 +294,12 @@ class BacktestEngine:
                         portfolio.cash_balance += gross
 
                         del positions[sym]
+                        pos = None  # No longer in position
+
+                # ── Sync position state to strategy after this bar's signals ──
+                # This ensures the strategy knows whether we are in/out of position
+                if hasattr(strategy, "set_in_position"):
+                    strategy.set_in_position(sym, sym in positions)
 
             # End of bar: record equity (positions reflect this bar's close)
             total_val = self._portfolio_value(portfolio, positions, data, at_ts=ts)
@@ -343,6 +353,13 @@ class BacktestEngine:
         avg_wl = avg_win / avg_loss if avg_loss > 0 else Decimal(0)
 
         monthly = self._monthly_returns(equity_curve, equity)
+
+        # Debug: print signal counts
+        if hasattr(self, "_engine_signal_counts"):
+            print(f"    [ENGINE] buy signals={self._engine_signal_counts['buy']}, "
+                  f"sell signals={self._engine_signal_counts['sell']}, "
+                  f"buy-ignored(in_pos)={self._engine_signal_counts['in_pos']}, "
+                  f"sell-ignored(no_pos)={self._engine_signal_counts['no_pos']}", flush=True)
 
         return BacktestResult(
             strategy_name=strategy.__class__.__name__,

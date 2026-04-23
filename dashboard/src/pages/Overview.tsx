@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   getHealth,
   getRiskStatus,
@@ -14,6 +14,7 @@ import {
   type EventsSummary,
   type RuntimeStatus,
 } from '../api/client';
+import { useWebSocket, type WsMessage, type KlineUpdate } from '../api/ws';
 import { riskDot, severityBadge, fmtNum, fmtPct, fmtTime, SafetyBanner, OfflineNotice, DegradedNotice, getReconciliationDotClass, getReconciliationLabel } from '../lib';
 
 // ── Placeholder data ──────────────────────────────────────────────────────────
@@ -45,6 +46,28 @@ const PLACEHOLDER_EVENTS: EventsSummary[] = [
     created_at: new Date().toISOString(),
   },
 ];
+
+// ── Market ticker ──────────────────────────────────────────────────────────────
+
+function MarketTickerStrip({ tickers }: { tickers: Record<string, KlineUpdate> }) {
+  const symbols = Object.keys(tickers).sort();
+  return (
+    <div className="market-ticker-strip">
+      {symbols.map((sym) => {
+        const t = tickers[sym];
+        const price = parseFloat(t.close);
+        return (
+          <div key={sym} className="ticker-chip">
+            <span className="ticker-symbol">{sym.replace('USDT', '')}</span>
+            <span className="ticker-price">${price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Sub-components ────────────────────────────────────────────────────────────
 
 const PLACEHOLDER_RUNTIME: RuntimeStatus = {
   last_cycle_status: null,
@@ -697,6 +720,8 @@ export default function Overview() {
   const [events,    setEvents]    = useState<EventsSummary[] | null>(null);
   const [runtime,   setRuntime]   = useState<RuntimeStatus | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [marketTickers, setMarketTickers] = useState<Record<string, KlineUpdate>>({});
   const [failures,  setFailures]  = useState<ApiFailures>({
     health: false,
     risk: false,
@@ -715,6 +740,8 @@ export default function Overview() {
   if (failures.orders)   failedPanelLabels.push('订单');
   if (failures.events)   failedPanelLabels.push('事件');
   if (failures.runtime)  failedPanelLabels.push('运行状态');
+
+  // ── REST fetch (fallback / initial load) ───────────────────────────────────
 
   const fetchAll = useCallback(() => {
     getHealth()
@@ -744,11 +771,61 @@ export default function Overview() {
     setLastUpdated(new Date());
   }, []);
 
+  // ── WebSocket real-time updates ───────────────────────────────────────────
+
+  const onWsMessage = useCallback((msg: WsMessage) => {
+    const p = msg.payload as { type?: string; [key: string]: unknown };
+    switch (p.type) {
+      case 'cycle_complete':
+        fetchAll();
+        break;
+      case 'portfolio_update':
+        if (p.data) { setPortfolio(p.data as PortfolioStatus); setLastUpdated(new Date()); }
+        break;
+      case 'risk_update':
+        if (p.data) { setRisk(p.data as RiskStatus); setLastUpdated(new Date()); }
+        break;
+      case 'orders_update':
+        if (p.data) { setOrders(p.data as OrderSummary[]); setLastUpdated(new Date()); }
+        break;
+      case 'events_update':
+        if (p.data) { setEvents(p.data as EventsSummary[]); setLastUpdated(new Date()); }
+        break;
+      case 'runtime_update':
+        if (p.data) { setRuntime(p.data as RuntimeStatus); setLastUpdated(new Date()); }
+        break;
+      case 'health_update':
+        if (p.data) { setHealth(p.data as HealthStatus); setLastUpdated(new Date()); }
+        break;
+      case 'kline_update':
+        if (p.data) {
+          const kline = p.data as KlineUpdate;
+          setMarketTickers((prev) => ({ ...prev, [kline.symbol]: kline }));
+          setLastUpdated(new Date());
+        }
+        break;
+      default:
+        fetchAll();
+    }
+  }, [fetchAll]);
+
+  const { connected } = useWebSocket({ onMessage: onWsMessage });
+
+  const wsConnectedRef = useRef(false);
+  useEffect(() => {
+    if (connected && !wsConnectedRef.current) {
+      wsConnectedRef.current = true;
+      setWsConnected(true);
+    }
+  }, [connected]);
+
   useEffect(() => {
     fetchAll();
-    const id = setInterval(fetchAll, 10_000);
-    return () => clearInterval(id);
-  }, [fetchAll]);
+    if (!wsConnected) {
+      const id = setInterval(fetchAll, 10_000);
+      return () => clearInterval(id);
+    }
+  }, [fetchAll, wsConnected]);
 
   return (
     <div className="page">
@@ -773,6 +850,10 @@ export default function Overview() {
         riskFailed={failures.risk}
         runtime={failures.runtime ? null : runtime}
       />
+
+      {Object.keys(marketTickers).length > 0 && (
+        <MarketTickerStrip tickers={marketTickers} />
+      )}
 
       <MetricsGrid
         portfolio={failures.portfolio ? null : portfolio}

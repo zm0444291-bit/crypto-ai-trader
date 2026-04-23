@@ -11,6 +11,7 @@ from threading import Event as ThreadingEvent
 from sqlalchemy.orm import Session
 
 from trading.ai.scorer import AIScorer
+from trading.dashboard_api.ws_manager import broadcast_from_sync
 from trading.execution.paper_executor import PaperExecutor
 from trading.market_data.candle_service import SYMBOLS
 from trading.notifications.base import NotificationContext, NotificationLevel, Notifier
@@ -18,6 +19,7 @@ from trading.notifications.dedup import AlertDeduplicator
 from trading.notifications.log_notifier import LogNotifier
 from trading.notifications.telegram_notifier import TelegramNotifier
 from trading.portfolio.accounting import PortfolioAccount
+from trading.risk.risk_monitor import RiskMonitor
 from trading.runtime.paper_cycle import CycleInput, CycleResult, run_paper_cycle
 from trading.storage.db import create_database_engine, create_session_factory, init_db
 from trading.storage.models import Candle
@@ -269,8 +271,12 @@ def _build_cycle_inputs(
     symbols: list[str],
     now: datetime,
     initial_cash_usdt: Decimal,
-) -> list[CycleInput]:
-    """Build CycleInput for each symbol using live DB state."""
+) -> tuple[list[CycleInput], Decimal, Decimal]:
+    """Build CycleInput for each symbol using live DB state.
+
+    Returns:
+        tuple of (inputs list, current account equity, day-start equity).
+    """
 
     exec_repo = ExecutionRecordsRepository(session)
     candles_repo = CandlesRepository(session)
@@ -391,7 +397,7 @@ def _build_cycle_inputs(
             )
         )
 
-    return inputs
+    return inputs, account_equity, day_start_equity
 
 
 def run_once(
@@ -440,7 +446,9 @@ def run_once(
             context={"symbols": symbols, "mode": "paper_only"},
         )
 
-        inputs = _build_cycle_inputs(session, symbols, now, initial_cash_usdt)
+        inputs, account_equity, day_start_equity = _build_cycle_inputs(
+            session, symbols, now, initial_cash_usdt
+        )
 
         for input_data in inputs:
             try:
@@ -502,6 +510,48 @@ def run_once(
             component="runner",
             message="Paper trading loop iteration finished",
             context={"cycles_run": len(results)},
+        )
+
+    # ── Risk monitoring ────────────────────────────────────────────────────
+    # RiskMonitor evaluates equity drawdown and broadcasts risk_state_changed
+    # events to the dashboard WS on transitions (normal → degraded → no_new_positions etc.)
+    risk_monitor = RiskMonitor(day_start_equity=day_start_equity)
+    risk_monitor.update_equity(account_equity)  # triggers evaluation + potential WS broadcast
+
+    # Send Telegram alert when risk state transitions to degraded or worse.
+    # Only notify on transition (not every cycle) to avoid spam.
+    equity_alert = risk_monitor.check_equity_alert()
+    if equity_alert is not None and dedup.should_notify(
+        event_type="risk_state_change",
+        component="risk_monitor",
+        symbol=None,
+    ):
+        level_map = {
+            "degraded": NotificationLevel.WARNING,
+            "no_new_positions": NotificationLevel.ERROR,
+            "global_pause": NotificationLevel.CRITICAL,
+        }
+        notify.notify(
+            level_map.get(equity_alert.risk_state, NotificationLevel.WARNING),
+            f"Risk alert: {equity_alert.risk_state}",
+            equity_alert.message,
+            {"risk_state": equity_alert.risk_state},
+        )
+
+    # ── WebSocket broadcast ────────────────────────────────────────────────
+    # Dispatch summary to all connected dashboard clients.  We broadcast after
+    # the session closes so this never blocks the DB transaction.
+    if results:
+        executed = [r for r in results if r.order_executed]
+        broadcast_from_sync(
+            "all",
+            "cycle_complete",
+            {
+                "cycles_run": len(results),
+                "executed_count": len(executed),
+                "symbols": [r.symbol for r in results],
+                "statuses": {r.symbol: r.status for r in results},
+            },
         )
 
     return results

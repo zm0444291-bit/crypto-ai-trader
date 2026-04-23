@@ -80,6 +80,39 @@ Output is operator-friendly and compact — each check prints a short label and 
 | `/runtime/status` `restart_exhausted_ingestion` | `false` |
 | `/runtime/status` `restart_exhausted_trading` | `false` |
 
+### WebSocket real-time push
+
+The backend pushes real-time events to connected dashboard clients over WebSocket at `ws://127.0.0.1:8000/ws`. Clients subscribe by channel; the server sends all messages on subscribed channels automatically.
+
+**Channels:**
+
+| Channel | Events |
+|---------|--------|
+| `runtime` | `heartbeat`, `loop_finished`, `cycle_complete` |
+| `portfolio` | `portfolio_update` |
+| `orders` | `order_update`, `order_fill` |
+| `risk` | `risk_update` (risk state changes, position limit warnings) |
+| `events` | `execution_gate_blocked`, `risk_rejected` |
+| `market` | `kline_update` (Binance real-time klines) |
+| `all` | Broadcast to all channels |
+
+**Dashboard WS integration:**
+- `Overview.tsx`: subscribes to `market` channel for real-time price ticker; falls back to polling on disconnect
+- `Risk.tsx`: subscribes to `risk` channel for instant risk state updates; shows WS connection indicator (green dot = live)
+- Connection is shared — multiple tab components use the same WebSocket instance
+
+**Protocol:** `WsMessage { channel, payload, ts }` where `payload` is event-type-specific:
+
+```typescript
+// risk_update payload
+{ event_type: 'risk_state_changed', risk_state: 'degraded', message: '...', details: {...}, timestamp: '...' }
+
+// kline_update payload
+{ symbol: 'BTCUSDT', timeframe: '1m', open: '...', high: '...', low: '...', close: '...', volume: '...' }
+```
+
+The frontend `useWebSocket` hook (`src/api/ws.ts`) handles auto-reconnect (3 s delay), channel filtering, and shared singleton connection across components.
+
 ### Inspect recent events
 
 ```bash

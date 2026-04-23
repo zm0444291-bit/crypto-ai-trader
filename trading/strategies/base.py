@@ -22,7 +22,7 @@ class TradeCandidate(BaseModel):
 
     strategy_name: str
     symbol: str
-    side: Literal["BUY"]
+    side: Literal["BUY", "SELL"]
     entry_reference: Decimal = Field(gt=0)
     stop_reference: Decimal = Field(gt=0)
     rule_confidence: Decimal = Field(ge=0, le=1)

@@ -204,8 +204,54 @@ make runtime-minimax-smoke   # Test AI scorer connectivity
 Tests are in `tests/unit/` and `tests/integration/`. Integration tests hit the real DB. Unit tests use mocks. Run with `make test` or `pytest tests/ -v`.
 
 ## Notes
-
 - The system uses **Decimal** for all financial calculations to avoid float precision issues.
 - All times are stored in UTC via `datetime.now(UTC)`.
 - The dashboard CORS whitelist is hardcoded to `http://127.0.0.1:5173` and `http://localhost:5173` — use these exact URLs.
 - The 24/7 LaunchAgent (`scripts/macos_launchd_runtime.sh`) reads `.env` for environment variables.
+
+---
+
+## Forex/Gold Migration
+
+The system is being migrated from Binance crypto spot to **IBKR + Pepperstone** for gold/forex trading.
+
+### New Architecture
+
+```
+trading/market_data/adapters/
+├── __init__.py          # Exports: create_ibkr_adapter, create_pepperstone_adapter, BidAskQuote
+├── base.py              # MarketDataAdapter ABC + BidAskQuote dataclass
+├── ibkr_adapter.py     # IBKR TWS API via ib_insync + MockIBKRAdapter fallback
+└── pepperstone_adapter.py  # Pepperstone REST API + MockPepperstoneAdapter fallback
+
+trading/events/
+└── economic_calendar.py  # NFP/CPI/FOMC block trading, market hours enforcement
+
+config/
+├── contracts.yaml       # XAUUSD (100oz, $10/point), EURUSD specs
+├── broker.yaml         # IBKR/Pepperstone API config templates
+└── strategy_params_forex.yaml  # EMA 21/50, RSI 35/65, ATR 2.5x stop
+```
+
+### Key Design Decisions
+
+- **Adapter pattern**: `MarketDataAdapter` ABC unifies IBKR and Pepperstone. Mock adapters enable testing without API keys.
+- **Bid/Ask pricing**: `BidAskQuote` dataclass replaces bps slippage. BUY uses ask, SELL uses bid.
+- **IBKR port**: Paper Trading = 4001, Live = 7496
+- **IBKR requires**: TWS or Gateway app running locally on port 4001
+- **Pepperstone**: REST API at `https://api.pepperstone.jp/v1`, falls back to mock
+- **Economic calendar**: Blocks XAUUSD/EURUSD trading 30min around NFP/FOMC/CPI events
+
+### Pending (requires user action)
+1. Register IBKR account, enable Market Data API permissions
+2. Run IBKR TWS or Gateway on port 4001
+3. Register Pepperstone demo account, get API key
+4. Fill `config/broker.yaml` with API credentials
+5. Run `git commit` on `forex-migration` branch
+
+### Commands
+```bash
+git checkout forex-migration
+cd ~/Desktop/crypto-ai-trader
+.venv/bin/python -m pytest tests/market_data/ tests/unit/test_paper_executor.py tests/events/ -v  # Run tests
+```

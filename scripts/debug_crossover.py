@@ -1,8 +1,10 @@
 """Debug: check EMA crossover data directly."""
 import sys
+
 sys.path.insert(0, '.')
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
+
 from trading.backtest.store import ParquetCandleStore
 
 store = ParquetCandleStore(Path('backtest_data/candles'))
@@ -10,8 +12,8 @@ df = store.load('BTCUSDT', '1h')
 
 # Filter to 2025 range (naive UTC → aware)
 df = df[
-    (df['timestamp'] >= datetime(2025, 1, 1, tzinfo=timezone.utc)) &
-    (df['timestamp'] < datetime(2026, 1, 1, tzinfo=timezone.utc))
+    (df['timestamp'] >= datetime(2025, 1, 1, tzinfo=UTC)) &
+    (df['timestamp'] < datetime(2026, 1, 1, tzinfo=UTC))
 ].reset_index(drop=True)
 
 print(f'2025 candles: {len(df)}')

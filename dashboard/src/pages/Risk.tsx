@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getRiskStatus, getRecentEvents, type EventsSummary, type RiskStatus } from '../api/client';
 import { severityBadge, fmtNum, fmtTime } from '../lib';
+import { useWebSocket, channelOf, type WsMessage, type RiskUpdate } from '../api/ws';
 
 function eventReason(e: EventsSummary): string | null {
   if (!e.context) return null;
@@ -75,6 +76,23 @@ export default function Risk() {
   const [riskFailed, setRiskFailed] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  const handleWsMessage = useCallback((msg: WsMessage) => {
+    if (!channelOf(msg, 'risk')) return;
+    const data = msg.payload as RiskUpdate;
+    if (data.event_type === 'risk_state_changed') {
+      // Update local risk state from WS broadcast
+      setRisk((prev) => prev ? {
+        ...prev,
+        risk_state: data.risk_state,
+        reason: data.message,
+      } : prev);
+    }
+  }, []);
+
+  const { connected: wsConnected } = useWebSocket({
+    onMessage: handleWsMessage,
+  });
+
   const fetchRisk = useCallback(() => {
     getRiskStatus(500, 500)
       .then((data) => { setRisk(data); setRiskFailed(false); })
@@ -105,7 +123,12 @@ export default function Risk() {
     fetchRejects();
     fetchGateBlocks();
     fetchSupervisorErrors();
-    const id = setInterval(() => { fetchRisk(); fetchRejects(); fetchGateBlocks(); fetchSupervisorErrors(); }, 30_000);
+    const id = setInterval(() => {
+      fetchRisk();
+      fetchRejects();
+      fetchGateBlocks();
+      fetchSupervisorErrors();
+    }, 30_000);
     return () => clearInterval(id);
   }, [fetchRisk, fetchRejects, fetchGateBlocks, fetchSupervisorErrors]);
 
@@ -145,6 +168,17 @@ export default function Risk() {
               <span style={{ fontFamily: 'var(--mono)', fontWeight: 600, fontSize: '0.9rem' }}>
                 {displayRisk?.risk_state ?? 'unknown'}
               </span>
+              <span
+                title={wsConnected ? 'WS 已连接 — 实时推送' : 'WS 未连接'}
+                style={{
+                  marginLeft: 'auto',
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background: wsConnected ? 'var(--positive)' : 'var(--text-muted)',
+                  flexShrink: 0,
+                }}
+              />
             </div>
             {displayRisk?.reason && displayRisk.reason !== '占位数据 — 后端离线' && (
               <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontFamily: 'var(--mono)' }}>

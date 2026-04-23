@@ -37,11 +37,17 @@ class BreakoutStrategy:
         lookback: int = 20,
         regime_adx_threshold: float = 20.0,
         min_confidence: float = 0.65,
+        max_holding_bars: int = 48,
+        trailing_stop_pct: float = 0.02,
     ) -> None:
         self.lookback = lookback
         self.regime_adx_threshold = regime_adx_threshold
         self.min_confidence = min_confidence
+        self.max_holding_bars = max_holding_bars
+        self.trailing_stop_pct = trailing_stop_pct
         self._in_position: dict[str, bool] = {}
+        self._bars_held: dict[str, int] = {}  # bars held while IN position
+        self._high_since_entry: dict[str, float] = {}  # for trailing stop
 
     # ------------------------------------------------------------------
     # Public API — BacktestEngine calls this
@@ -91,20 +97,58 @@ class BreakoutStrategy:
         channel_high = float(lookback_highs.max())  # type: ignore[union-attr]
         channel_low = float(lookback_lows.min())  # type: ignore[union-attr]
 
-        # Current bar close
+        # Current bar values
         close_last = close_vals[-1]
         close_prev = close_vals[-2]
+        high_last = high_vals[-1]
+        low_last = low_vals[-1]
 
         signals: list[Signal] = []
 
-        # LONG breakout: price closes above channel_high (and wasn't above yesterday)
-        if not in_pos and close_prev <= channel_high and close_last > channel_high:
-            self._in_position[symbol] = True
-            signals.append(Signal(qty=Decimal("1"), side="buy", entry_atr=None))
+        # ── In position: update trailing stop & check exits ─────────────────
+        if in_pos:
+            # Increment bars held counter
+            self._bars_held[symbol] = self._bars_held.get(symbol, 0) + 1
 
-        # EXIT: price falls below channel_low while in position
-        elif in_pos and close_last < channel_low:
-            self._in_position[symbol] = False
-            signals.append(Signal(qty=Decimal("1"), side="sell", entry_atr=None))
+            # Update trailing stop high water mark
+            self._high_since_entry[symbol] = max(
+                self._high_since_entry.get(symbol, close_last), high_last
+            )
+
+            exit_taken = False
+
+            # Trailing stop exit: price falls below (1 - trailing_stop_pct) of high since entry
+            if self.trailing_stop_pct > 0:
+                stop_level = self._high_since_entry[symbol] * (1 - self.trailing_stop_pct)
+                if low_last < stop_level:
+                    self._in_position[symbol] = False
+                    self._bars_held[symbol] = 0
+                    self._high_since_entry[symbol] = 0.0
+                    signals.append(Signal(qty=Decimal("1"), side="sell", entry_atr=None))
+                    exit_taken = True
+
+            # Time-based exit: held too many bars (only if no exit taken yet)
+            if not exit_taken and self._bars_held[symbol] >= self.max_holding_bars:
+                self._in_position[symbol] = False
+                self._bars_held[symbol] = 0
+                self._high_since_entry[symbol] = 0.0
+                signals.append(Signal(qty=Decimal("1"), side="sell", entry_atr=None))
+                exit_taken = True
+
+            # Channel low exit (stop-loss) — only if no exit taken yet
+            if not exit_taken and low_last < channel_low:
+                self._in_position[symbol] = False
+                self._bars_held[symbol] = 0
+                self._high_since_entry[symbol] = 0.0
+                signals.append(Signal(qty=Decimal("1"), side="sell", entry_atr=None))
+
+        # ── Not in position: check for breakout entry ───────────────────────
+        else:
+            # LONG breakout: price closes above channel_high (and wasn't above yesterday)
+            if close_prev <= channel_high and close_last > channel_high:
+                self._in_position[symbol] = True
+                self._bars_held[symbol] = 0
+                self._high_since_entry[symbol] = high_last
+                signals.append(Signal(qty=Decimal("1"), side="buy", entry_atr=None))
 
         return signals

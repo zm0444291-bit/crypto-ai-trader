@@ -4,9 +4,8 @@ strategies:
       enabled: true
       mode: paper_auto
       symbols:
-        - BTCUSDT
-        - ETHUSDT
-        - SOLUSDT
+        - XAUUSD
+        - EURUSD
   templates:
     futures_momentum:
       enabled: false

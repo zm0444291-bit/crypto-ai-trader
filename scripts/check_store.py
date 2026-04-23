@@ -1,7 +1,10 @@
 import sys
+
 sys.path.insert(0, '.')
-from trading.backtest.store import ParquetCandleStore
 from datetime import datetime
+
+from trading.backtest.store import ParquetCandleStore
+
 store = ParquetCandleStore('backtest_data/candles')
 df = store.load('BTCUSDT', '1h')
 print('dtypes:', df.dtypes.to_dict())

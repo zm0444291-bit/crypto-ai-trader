@@ -1,4 +1,6 @@
+import asyncio
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,9 +14,32 @@ from trading.dashboard_api.routes_orders import router as orders_router
 from trading.dashboard_api.routes_portfolio import router as portfolio_router
 from trading.dashboard_api.routes_risk import router as risk_router
 from trading.dashboard_api.routes_runtime import router as runtime_router
+from trading.dashboard_api.ws_manager import get_manager, register_loop
+from trading.dashboard_api.ws_manager import router as ws_router
+from trading.market_data.market_data_ws_manager import get_market_data_manager
 from trading.storage.repositories import EventsRepository
 
-app = FastAPI(title="Crypto AI Trader")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start/stop WS managers when FastAPI server starts/shuts down."""
+    register_loop(asyncio.get_running_loop())
+
+    # Dashboard WS manager (runtime events → browser)
+    manager = get_manager()
+    manager.start()
+
+    # Binance market data WS → dashboard WS bridge
+    md_manager = get_market_data_manager()
+    await md_manager.start()
+
+    yield
+
+    await md_manager.stop()
+    await manager.stop()
+
+
+app = FastAPI(title="Crypto AI Trader", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,6 +47,7 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+app.include_router(ws_router)
 app.include_router(analytics_router)
 app.include_router(events_router)
 app.include_router(health_router)

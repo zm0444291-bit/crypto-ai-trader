@@ -1,13 +1,15 @@
 import sys
+
 sys.path.insert(0, '.')
+from datetime import UTC, datetime
+
 from trading.backtest.store import ParquetCandleStore
 from trading.features.indicators import ema
-from datetime import datetime, timezone
 
 store = ParquetCandleStore('backtest_data/candles')
 df = store.load('BTCUSDT', '1h')
-df = df[(df['timestamp'] >= datetime(2025, 1, 1, tzinfo=timezone.utc)) &
-        (df['timestamp'] < datetime(2026, 1, 1, tzinfo=timezone.utc))].copy()
+df = df[(df['timestamp'] >= datetime(2025, 1, 1, tzinfo=UTC)) &
+        (df['timestamp'] < datetime(2026, 1, 1, tzinfo=UTC))].copy()
 df = df.reset_index(drop=True)
 print(f'Loaded {len(df)} candles')
 

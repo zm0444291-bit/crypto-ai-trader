@@ -1,0 +1,32 @@
+# broker.yaml
+# Broker API configuration for IBKR and Pepperstone
+
+ibkr:
+  enabled: true
+  host: 127.0.0.1
+  port: 4001  # TWS paper trading port
+  client_id: 1
+  account_id: DEMO123
+  use_ssl: false
+  timeout: 30
+  market_data_type: 2  # 1=live, 2=delayed, 3=frozen
+  api_version: v2
+
+pepperstone:
+  enabled: true
+  server: "trading.pepperstone.com"
+  port: 443
+  api_key: "${PEPPERSTONE_API_KEY}"  # environment variable reference
+  api_secret: "${PEPPERSTONE_API_SECRET}"
+  account_id: "MT4-123456"
+  timeout: 15
+  use_ssl: true
+  rate_limit:
+    requests_per_second: 10
+    burst: 20
+
+execution:
+  default_broker: ibkr
+  fallback_broker: pepperstone
+  max_retry_attempts: 3
+  retry_delay_seconds: 5

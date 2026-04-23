@@ -53,11 +53,11 @@ class Candle(Base):
     timeframe: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
     open_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     close_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    open: Mapped[Numeric] = mapped_column(Numeric(28, 10), nullable=False)
-    high: Mapped[Numeric] = mapped_column(Numeric(28, 10), nullable=False)
-    low: Mapped[Numeric] = mapped_column(Numeric(28, 10), nullable=False)
-    close: Mapped[Numeric] = mapped_column(Numeric(28, 10), nullable=False)
-    volume: Mapped[Numeric] = mapped_column(Numeric(28, 10), nullable=False)
+    open: Mapped[Numeric] = mapped_column(Numeric(28, 10), nullable=False)  # type: ignore[type-arg]
+    high: Mapped[Numeric] = mapped_column(Numeric(28, 10), nullable=False)  # type: ignore[type-arg]
+    low: Mapped[Numeric] = mapped_column(Numeric(28, 10), nullable=False)  # type: ignore[type-arg]
+    close: Mapped[Numeric] = mapped_column(Numeric(28, 10), nullable=False)  # type: ignore[type-arg]
+    volume: Mapped[Numeric] = mapped_column(Numeric(28, 10), nullable=False)  # type: ignore[type-arg]
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="binance")
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

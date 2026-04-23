@@ -10,7 +10,10 @@ import uuid
 from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from trading.market_data.schemas import CandleData
 
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -57,7 +60,7 @@ LIFECYCLE_STAGES = (
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
-def _orm_candle_to_data(candle: Any):
+def _orm_candle_to_data(candle: Any) -> "CandleData":
     """Convert an ORM Candle row to a CandleData for build_features."""
     from trading.market_data.schemas import CandleData
 

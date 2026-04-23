@@ -76,7 +76,7 @@ class TelegramNotifier:
                 "text": text,
                 "parse_mode": "Markdown",
             }
-            with httpx.Client(timeout=(5, 10)) as client:
+            with httpx.Client(timeout=httpx.Timeout(5, read=10)) as client:
                 resp = client.post(url, data=payload)
                 resp.raise_for_status()
         except httpx.TimeoutException as exc:

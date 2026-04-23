@@ -18,6 +18,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from threading import Event as ThreadingEvent
@@ -49,6 +50,14 @@ HEARTBEAT_RECOVERY_CONFIRM_SECONDS = 60  # 1 minute of confirmed heartbeat
 # Default restart strategy constants
 DEFAULT_MAX_RESTARTS = 3
 DEFAULT_COOLDOWN_SECONDS = 0
+
+
+@dataclass
+class _RestartState:
+    restart_count: int
+    last_attempt: datetime | None
+    exhausted: bool
+    had_crash: bool
 
 
 def run_supervisor(
@@ -98,8 +107,8 @@ def run_supervisor(
                     component="supervisor",
                     message="Supervisor heartbeat",
                     context={
-                        "ingest_thread_alive": ingest_thread.is_alive(),
-                        "trading_thread_alive": trade_thread.is_alive(),
+                        "ingest_thread_alive": ingest_thread.is_alive() if ingest_thread else False,
+                        "trading_thread_alive": trade_thread.is_alive() if trade_thread else False,
                         "uptime_seconds": int(
                             (datetime.now(UTC) - _start_time).total_seconds()
                         ),
@@ -292,19 +301,19 @@ def run_supervisor(
     # These are shared mutable containers protected by the Python GIL.
     # Only ingestion_target and trading_target write to their own keys.
     # The supervisor main loop only reads them on the way out.
-    _restart_state: dict[str, dict[str, object]] = {
-        "ingestion": {
-            "restart_count": 0,     # number of restart attempts made
-            "last_attempt": None,   # datetime of last restart attempt
-            "exhausted": False,
-            "had_crash": False,     # True if current iteration follows a crash
-        },
-        "trading": {
-            "restart_count": 0,
-            "last_attempt": None,
-            "exhausted": False,
-            "had_crash": False,
-        },
+    _restart_state: dict[str, _RestartState] = {
+        "ingestion": _RestartState(
+            restart_count=0,
+            last_attempt=None,
+            exhausted=False,
+            had_crash=False,
+        ),
+        "trading": _RestartState(
+            restart_count=0,
+            last_attempt=None,
+            exhausted=False,
+            had_crash=False,
+        ),
     }
 
     def _record_restart_event(
@@ -340,10 +349,10 @@ def run_supervisor(
             (can_restart, message)
         """
         state = _restart_state[component]
-        if state["exhausted"]:
+        if state.exhausted:
             return False, "component is exhausted"
 
-        count = state["restart_count"]
+        count = state.restart_count
         if count >= max_restarts:
             return False, f"max restarts ({max_restarts}) exceeded"
 
@@ -353,13 +362,13 @@ def run_supervisor(
         nonlocal ingestion_exc
         component = "ingestion"
         first_iteration = True
-        while first_iteration or _restart_state[component]["had_crash"] or not stop.is_set():
+        while first_iteration or _restart_state[component].had_crash or not stop.is_set():
             first_iteration = False
             state = _restart_state[component]
             # Track whether this iteration follows a crash (for success event)
-            is_retry = state["had_crash"]
+            is_retry = state.had_crash
             # Reset per-attempt state
-            state["had_crash"] = False
+            state.had_crash = False
 
             try:
                 ingest_loop(
@@ -375,23 +384,23 @@ def run_supervisor(
                     _record_restart_event(
                         "component_restart_succeeded",
                         component,
-                        state["restart_count"],
+                        state.restart_count,
                         "restart succeeded",
                     )
-                    state["restart_count"] = 0  # reset after success
+                    state.restart_count = 0  # reset after success
                 break
             except Exception as exc:
                 logger.exception("Ingestion thread raised an exception")
                 can_restart, _reason = _can_restart(component)
 
                 if can_restart:
-                    state["restart_count"] += 1
-                    state["last_attempt"] = datetime.now(UTC)
-                    state["had_crash"] = True
+                    state.restart_count += 1
+                    state.last_attempt = datetime.now(UTC)
+                    state.had_crash = True
                     _record_restart_event(
                         "component_restart_attempted",
                         component,
-                        state["restart_count"],
+                        state.restart_count,
                         str(exc),
                     )
                     # Cooldown before next attempt. Emit an additional attempted event
@@ -400,7 +409,7 @@ def run_supervisor(
                         _record_restart_event(
                             "component_restart_attempted",
                             component,
-                            state["restart_count"],
+                            state.restart_count,
                             "cooldown before restart",
                             cooldown_active=True,
                         )
@@ -408,12 +417,12 @@ def run_supervisor(
                     continue  # retry
                 else:
                     # Cannot restart — exhausted
-                    if state["restart_count"] >= max_restarts and not state["exhausted"]:
-                        state["exhausted"] = True
+                    if state.restart_count >= max_restarts and not state.exhausted:
+                        state.exhausted = True
                         _record_restart_event(
                             "component_restart_exhausted",
                             component,
-                            state["restart_count"],
+                            state.restart_count,
                             str(exc),
                         )
                     ingestion_exc = exc
@@ -425,13 +434,13 @@ def run_supervisor(
         nonlocal trading_exc
         component = "trading"
         first_iteration = True
-        while first_iteration or _restart_state[component]["had_crash"] or not stop.is_set():
+        while first_iteration or _restart_state[component].had_crash or not stop.is_set():
             first_iteration = False
             state = _restart_state[component]
             # Track whether this iteration follows a crash (for success event)
-            is_retry = state["had_crash"]
+            is_retry = state.had_crash
             # Reset per-attempt state
-            state["had_crash"] = False
+            state.had_crash = False
 
             try:
                 run_loop(
@@ -451,23 +460,23 @@ def run_supervisor(
                     _record_restart_event(
                         "component_restart_succeeded",
                         component,
-                        state["restart_count"],
+                        state.restart_count,
                         "restart succeeded",
                     )
-                    state["restart_count"] = 0  # reset after success
+                    state.restart_count = 0  # reset after success
                 break
             except Exception as exc:
                 logger.exception("Trading thread raised an exception")
                 can_restart, _reason = _can_restart(component)
 
                 if can_restart:
-                    state["restart_count"] += 1
-                    state["last_attempt"] = datetime.now(UTC)
-                    state["had_crash"] = True
+                    state.restart_count += 1
+                    state.last_attempt = datetime.now(UTC)
+                    state.had_crash = True
                     _record_restart_event(
                         "component_restart_attempted",
                         component,
-                        state["restart_count"],
+                        state.restart_count,
                         str(exc),
                     )
                     # Cooldown before next attempt. Emit an additional attempted event
@@ -476,7 +485,7 @@ def run_supervisor(
                         _record_restart_event(
                             "component_restart_attempted",
                             component,
-                            state["restart_count"],
+                            state.restart_count,
                             "cooldown before restart",
                             cooldown_active=True,
                         )
@@ -484,12 +493,12 @@ def run_supervisor(
                     continue  # retry
                 else:
                     # Cannot restart — exhausted
-                    if state["restart_count"] >= max_restarts and not state["exhausted"]:
-                        state["exhausted"] = True
+                    if state.restart_count >= max_restarts and not state.exhausted:
+                        state.exhausted = True
                         _record_restart_event(
                             "component_restart_exhausted",
                             component,
-                            state["restart_count"],
+                            state.restart_count,
                             str(exc),
                         )
                     trading_exc = exc

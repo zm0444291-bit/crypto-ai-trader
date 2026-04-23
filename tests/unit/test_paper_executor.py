@@ -1,14 +1,28 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-import pytest
-
 from trading.execution.paper_executor import (
     SLIPPAGE_TIERS,
     PaperExecutor,
 )
+from trading.market_data.adapters.base import BidAskQuote
 from trading.risk.position_sizing import PositionSizeResult
 from trading.strategies.base import TradeCandidate
+
+
+def make_quote(
+    symbol: str = "BTCUSDT",
+    bid: Decimal = Decimal("5000"),
+    ask: Decimal = Decimal("5000.5"),
+) -> BidAskQuote:
+    return BidAskQuote(
+        symbol=symbol,
+        timestamp=datetime(2026, 4, 19, 1, 0, tzinfo=UTC),
+        bid=bid,
+        ask=ask,
+        spread_bps=Decimal("1"),
+        source="test",
+    )
 
 
 def make_candidate(symbol: str = "BTCUSDT") -> TradeCandidate:
@@ -255,3 +269,72 @@ class TestTierValues:
 
     def test_default_tier_15(self):
         assert SLIPPAGE_TIERS["default"] == Decimal("15")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BidAskQuote tests (VA-0.1.4 / VA-0.1.5)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestExecuteMarketBuyWithBidAskQuote:
+    """VA-0.1.4: execute_market_buy uses ask price from BidAskQuote."""
+
+    def test_buy_uses_ask_price(self):
+        """BUY should use the ask price from the quote."""
+        executor = PaperExecutor(fee_bps=Decimal("10"))
+        quote = make_quote(symbol="BTCUSDT", bid=Decimal("5000"), ask=Decimal("5000.5"))
+        result = executor.execute_market_buy(
+            candidate=make_candidate("BTCUSDT"),
+            position_size=approved_size(Decimal("100")),
+            market_price=quote,
+            executed_at=datetime(2026, 4, 19, 1, 1, tzinfo=UTC),
+        )
+        assert result.approved is True
+        # ask = 5000.5, BTCUSDT tier = 5 bps → fill_price = 5000.5 * (1 + 5/10000)
+        expected_price = Decimal("5000.5") * (Decimal("1") + Decimal("5") / Decimal("10000"))
+        assert result.fill.price == expected_price
+
+    def test_buy_with_zero_ask_rejected(self):
+        """Zero ask price should be rejected."""
+        executor = PaperExecutor()
+        quote = make_quote(symbol="BTCUSDT", bid=Decimal("5000"), ask=Decimal("0"))
+        result = executor.execute_market_buy(
+            candidate=make_candidate("BTCUSDT"),
+            position_size=approved_size(Decimal("100")),
+            market_price=quote,
+            executed_at=datetime(2026, 4, 19, 1, 1, tzinfo=UTC),
+        )
+        assert result.approved is False
+        assert "invalid_market_price" in result.reject_reasons
+
+
+class TestExecuteMarketSellWithBidAskQuote:
+    """VA-0.1.5: execute_market_sell uses bid price from BidAskQuote."""
+
+    def test_sell_uses_bid_price(self):
+        """SELL should use the bid price from the quote."""
+        executor = PaperExecutor(fee_bps=Decimal("10"))
+        quote = make_quote(symbol="BTCUSDT", bid=Decimal("5000"), ask=Decimal("5000.5"))
+        result = executor.execute_market_sell(
+            symbol="BTCUSDT",
+            qty=Decimal("1"),
+            market_price=quote,
+            executed_at=datetime(2026, 4, 19, 1, 1, tzinfo=UTC),
+        )
+        assert result.approved is True
+        # bid = 5000, BTCUSDT tier = 5 bps → fill_price = 5000 * (1 - 5/10000)
+        expected_price = Decimal("5000") * (Decimal("1") - Decimal("5") / Decimal("10000"))
+        assert result.fill.price == expected_price
+
+    def test_sell_with_zero_bid_rejected(self):
+        """Zero bid price should be rejected."""
+        executor = PaperExecutor()
+        quote = make_quote(symbol="BTCUSDT", bid=Decimal("0"), ask=Decimal("5000.5"))
+        result = executor.execute_market_sell(
+            symbol="BTCUSDT",
+            qty=Decimal("1"),
+            market_price=quote,
+            executed_at=datetime(2026, 4, 19, 1, 1, tzinfo=UTC),
+        )
+        assert result.approved is False
+        assert "invalid_market_price" in result.reject_reasons

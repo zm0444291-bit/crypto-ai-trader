@@ -1,69 +1,58 @@
-"""Debug: trace through the engine's run loop."""
+"""Debug: patch engine to catch swallowed exceptions and count signals precisely."""
 import sys
-sys.path.insert(0, '.')
-from pathlib import Path
-from datetime import datetime, timezone
+import traceback
 from decimal import Decimal
+from pathlib import Path
+
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from scripts.run_regression_backtest import BacktestAdapter, FeatureCache, Signal
 from trading.backtest.engine import BacktestConfig, BacktestEngine
 from trading.backtest.store import ParquetCandleStore
+from trading.strategies.active.strategy_selector import StrategySelector
 
-store = ParquetCandleStore(Path('backtest_data/candles'))
-config = BacktestConfig(
-    fee_bps=Decimal("10"),
-    slippages={"default": Decimal("5")},
-    initial_equity=Decimal("10_000"),
-    interval="1h",
-)
-engine = BacktestEngine(config, store)
 
-# Patch engine to add debug output
-orig_run = engine.run
-
-class EMACrossoverStrategy:
-    def __init__(self):
-        self._in_position = {}
-        self.call_count = 0
-        self.signal_count = 0
-
-    def generate_signals(self, symbol, df):
-        self.call_count += 1
-        if len(df) < 52:
+class VerboseAdapter(BacktestAdapter):
+    def generate_signals(self, symbol: str, df: pd.DataFrame) -> list[Signal]:
+        try:
+            result = super().generate_signals(symbol, df)
+            if result:
+                print(f"  SIGNAL at {self._bars['timestamp'].iloc[-1]}: {result[0].side} {result[0].qty}")
+            return result
+        except Exception as e:
+            print(f"  EXCEPTION in generate_signals: {e}")
+            traceback.print_exc()
             return []
-        closes = df["close"].astype(float)
-        fast = closes.ewm(span=20, adjust=False).mean()
-        slow = closes.ewm(span=50, adjust=False).mean()
-        fast_vals = fast.values
-        slow_vals = slow.values
-        in_pos = self._in_position.get(symbol, False)
-        crossover_up = (
-            fast_vals[-2] <= slow_vals[-2] and fast_vals[-1] > slow_vals[-1]
-        )
-        crossover_down = (
-            fast_vals[-2] >= slow_vals[-2] and fast_vals[-1] < slow_vals[-1]
-        )
-        if not in_pos and crossover_up:
-            self._in_position[symbol] = True
-            self.signal_count += 1
-            print(f"  [SIGNAL] BUY at {df['timestamp'].iloc[-1]}")
-            return [__import__('dataclasses').dataclass(__import__('typing').Annotated)[__import__('typing').Any](qty=Decimal("1"), side="buy")]
-        if in_pos and crossover_down:
-            self._in_position[symbol] = False
-            self.signal_count += 1
-            print(f"  [SIGNAL] SELL at {df['timestamp'].iloc[-1]}")
-            return [__import__('dataclasses').dataclass(__import__('typing').Annotated)[__import__('typing').Any](qty=Decimal("1"), side="sell")]
-        return []
 
-strategy = EMACrossoverStrategy()
 
-result = engine.run(
-    strategy=strategy,
-    symbols=["BTCUSDT"],
-    start_time=datetime(2025, 1, 1),
-    end_time=datetime(2026, 1, 1),
-)
+if __name__ == "__main__":
+    store = ParquetCandleStore(Path("backtest_data/candles"))
+    df = store.load("BTCUSDT", "15m")
+    df = df[
+        (df["timestamp"] >= pd.Timestamp("2025-09-25", tz="UTC"))
+        & (df["timestamp"] <= pd.Timestamp("2025-10-10", tz="UTC"))
+    ].copy()
+    print(f"Rows: {len(df)}")
 
-print(f"\nTotal generate_signals calls: {strategy.call_count}")
-print(f"Total signals generated: {strategy.signal_count}")
-print(f"Total trades: {result.total_trades}")
+    cache = FeatureCache(df, symbol="BTCUSDT")
+    selector = StrategySelector()
+    adapter = VerboseAdapter(cache, selector)
+
+    config = BacktestConfig(
+        fee_bps=Decimal("10"),
+        slippages={"default": Decimal("5")},
+        initial_equity=Decimal("10000"),
+        interval="15m",
+    )
+    engine = BacktestEngine(config, store)
+
+    result = engine.run(
+        strategy=adapter,
+        symbols=["BTCUSDT"],
+        start_time=pd.Timestamp("2025-09-25", tz="UTC").to_pydatetime(),
+        end_time=pd.Timestamp("2025-10-10", tz="UTC").to_pydatetime(),
+    )
+
+    print(f"\nTotal trades: {result.total_trades}")

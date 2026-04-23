@@ -15,6 +15,8 @@ class CandleFeatures(BaseModel):
     timeframe: str
     candle_time: datetime
     close: Decimal
+    high: Decimal | None = None
+    low: Decimal | None = None
     ema_fast: Decimal | None
     ema_slow: Decimal | None
     ema_200: Decimal | None
@@ -42,6 +44,8 @@ def build_features(candles: list[CandleData]) -> list[CandleFeatures]:
             timeframe=candle.timeframe,
             candle_time=candle.open_time,
             close=candle.close,
+            high=candle.high,
+            low=candle.low,
             ema_fast=ema_fast_values[index],
             ema_slow=ema_slow_values[index],
             ema_200=ema_200_values[index],
