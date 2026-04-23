@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from pathlib import Path
 
 
 class ImpactLevel(Enum):
@@ -36,6 +37,65 @@ MARKET_HOLIDAYS: set[str] = {
     # Good Friday (placeholder - add specific year)
     "04-18",
 }
+
+
+def load_economic_events_from_yaml(path: Path) -> list[EconomicEvent]:
+    """Load economic events from a YAML file.
+
+    YAML format::
+
+        high_impact:
+          - date: "2025-06-06 14:00"
+            name: "NFP"
+            symbols: ["XAUUSD", "EURUSD"]
+
+        medium_impact:
+          - date: "2025-07-16 14:30"
+            name: "Retail Sales"
+            symbols: ["XAUUSD", "EURUSD"]
+
+    Args:
+        path: Path to the YAML file.
+
+    Returns:
+        List of EconomicEvent objects.
+
+    Raises:
+        FileNotFoundError: if the file does not exist.
+        ValueError: if a date cannot be parsed.
+    """
+    import yaml  # local import to avoid hard requirement for non-YAML users
+
+    with open(path, encoding="utf-8") as fh:
+        data = yaml.safe_load(fh)
+
+    events: list[EconomicEvent] = []
+    for section_key, impact_level in [
+        ("high_impact", ImpactLevel.HIGH),
+        ("medium_impact", ImpactLevel.MEDIUM),
+    ]:
+        section = data.get(section_key, [])
+        if not isinstance(section, list):
+            continue
+        for entry in section:
+            date_str = entry.get("date", "")
+            name = entry.get("name", "Unknown")
+            symbols: list[str] = entry.get("symbols", [])
+            try:
+                dt = datetime.fromisoformat(date_str).replace(tzinfo=datetime.UTC)
+            except ValueError:
+                raise ValueError(f"Invalid date format in economic_calendar.yaml: {date_str!r}") from None
+            events.append(
+                EconomicEvent(
+                    name=name,
+                    date=dt,
+                    impact=impact_level,
+                    affected_symbols=symbols,
+                    currency="USD",
+                )
+            )
+
+    return events
 
 
 def _parse_fundamental_date(date_str: str, time_str: str) -> datetime | None:
@@ -152,9 +212,18 @@ class EconomicCalendar:
     Also enforces market hours and holiday closures.
     """
 
-    def __init__(self) -> None:
-        self._events: list[EconomicEvent] = []
-        self._load_2025_events()
+    def __init__(self, events: list[EconomicEvent] | None = None) -> None:
+        """Initialize the calendar.
+
+        Args:
+            events: Pre-loaded list of events. If None, falls back to the
+                embedded 2025 event set for backward compatibility.
+        """
+        if events is not None:
+            self._events = events
+        else:
+            self._events = []
+            self._load_2025_events()
 
     def _load_2025_events(self) -> None:
         """Pre-load 2025 high and medium impact events."""

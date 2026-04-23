@@ -12,7 +12,10 @@ from sqlalchemy.orm import Session
 
 from trading.ai.scorer import AIScorer
 from trading.dashboard_api.ws_manager import broadcast_from_sync
-from trading.events.economic_calendar import EconomicCalendar
+from trading.events.economic_calendar import (
+    EconomicCalendar,
+    load_economic_events_from_yaml,
+)
 from trading.execution.paper_executor import PaperExecutor
 from trading.market_data.adapters.base import BidAskQuote, MarketDataAdapter
 from trading.market_data.candle_service import SYMBOLS
@@ -466,7 +469,9 @@ def run_once(
             session, symbols, now, initial_cash_usdt, adapter=adapter
         )
 
-        economic_calendar = EconomicCalendar()
+        economic_calendar = EconomicCalendar(
+            events=load_economic_events_from_yaml(_CONFIG_DIR / "economic_calendar.yaml")
+        )
         strategy_selector = StrategySelector(symbols=symbols, economic_calendar=economic_calendar)
 
         for input_data in inputs:
