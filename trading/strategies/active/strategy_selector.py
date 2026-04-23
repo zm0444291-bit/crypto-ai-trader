@@ -20,6 +20,7 @@ from decimal import Decimal
 
 import pandas as pd
 
+from trading.events.economic_calendar import EconomicCalendar
 from trading.features.builder import CandleFeatures
 from trading.strategies.active.breakout import BreakoutStrategy
 from trading.strategies.active.market_regime import detect_market_regime
@@ -40,11 +41,13 @@ class StrategySelector:
         regime_adx_threshold: float = 25.0,
         bb_narrow_threshold: float = 0.04,
         min_confidence: float = 0.6,
+        economic_calendar: EconomicCalendar | None = None,
     ) -> None:
-        self.symbols = symbols or ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+        self.symbols = symbols or ["XAUUSD"]
         self.regime_adx_threshold = regime_adx_threshold
         self.bb_narrow_threshold = bb_narrow_threshold
         self.min_confidence = min_confidence
+        self._economic_calendar = economic_calendar
 
         # Stateles strategy instances (no internal position state)
         self._breakout = BreakoutStrategy(
@@ -257,6 +260,14 @@ class StrategySelector:
             # Entries blocked during: crossover hours (08:00–13:30 UTC) + weekends
             if sig.side.lower() == "buy" and not self._is_entry_session(now):
                 continue
+
+            # ── Economic calendar filter for ENTRY signals ───────────────────
+            # Block entries during high/medium impact news windows:
+            #   HIGH impact: 30 min before + 30 min after
+            #   MEDIUM impact: 15 min before + 15 min after
+            if sig.side.lower() == "buy" and self._economic_calendar is not None:
+                if self._economic_calendar.is_trading_blocked(now, symbol):
+                    continue
 
             cand = self._signal_to_candidate(sig, symbol, regime, features_15m, now)
             if cand:
