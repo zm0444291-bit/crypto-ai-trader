@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -118,7 +118,7 @@ class LiveExecutorConfig:
     allowed_symbols: list[str]
     live_trading_enabled: bool
     base_url: str = "https://api.binance.com"
-    timeout: float | httpx.Timeout = _DEFAULT_TIMEOUT
+    timeout: float | httpx.Timeout = field(default_factory=lambda: httpx.Timeout(10.0, connect=5.0))
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +259,12 @@ class LiveExecutor:
         ).hexdigest()
         return {**params, "signature": signature}
 
-    def _request(self, method: str, endpoint: str, params: dict[str, str] | None = None) -> dict[str, Any]:
+    def _request(
+        self,
+        method: str,
+        endpoint: str,
+        params: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """Make an authenticated Binance API request.
 
         Raises:

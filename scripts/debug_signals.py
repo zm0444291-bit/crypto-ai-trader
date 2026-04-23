@@ -53,7 +53,7 @@ def run():
     portfolio = PortfolioAccount(cash_balance=config.initial_equity)
     positions = {}
     trades = []
-    equity_curve = []
+
 
     signal_count = 0
     skip_log = []

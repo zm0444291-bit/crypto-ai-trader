@@ -86,7 +86,7 @@ def step_analyze_result(tracker: TaskTracker, result) -> bool:
     if not result.ok:
         # 可能是 Python 崩溃，找一下 traceback
         lines = result.output.splitlines()
-        tb = [l for l in lines if "Traceback" in l or "Error:" in l or "Exception" in l]
+        tb = [line for line in lines if "Traceback" in line or "Error:" in line or "Exception" in line]
         reason = tb[-1].strip() if tb else f"exit {result.exit_code}"
         tracker.fail("结果分析", reason=reason)
         return False

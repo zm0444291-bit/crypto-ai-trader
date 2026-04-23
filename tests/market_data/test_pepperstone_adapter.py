@@ -5,6 +5,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from trading.market_data.adapters import pepperstone_adapter as pepperstone_module
 from trading.market_data.adapters.pepperstone_adapter import (
@@ -12,11 +13,6 @@ from trading.market_data.adapters.pepperstone_adapter import (
     PepperstoneAdapter,
     create_pepperstone_adapter,
 )
-
-# Re-export for convenience
-MockPepperstoneAdapter = pepperstone_module.MockPepperstoneAdapter
-create_pepperstone_adapter = pepperstone_module.create_pepperstone_adapter
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -389,14 +385,10 @@ class TestCreatePepperstoneAdapter:
             mock_instance = MagicMock(spec=PepperstoneAdapter)
             mock_instance.health_check.return_value = True
             mock_cls.return_value = mock_instance
-            adapter = create_pepperstone_adapter(
+            create_pepperstone_adapter(
                 api_key="test_key",
                 api_secret="test_secret",
                 use_mock=False,
             )
             # The factory returns the live adapter when health_check passes
             assert mock_cls.called
-
-
-# Import requests for HTTPError reference
-import requests

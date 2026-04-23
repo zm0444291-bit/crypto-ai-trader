@@ -313,7 +313,7 @@ def _build_cycle_inputs(
             latest_candles[symbol] = latest
 
     # Fetch real-time bid/ask quotes when adapter is available
-    bid_ask_quotes: dict[str, "BidAskQuote"] | None = None
+    bid_ask_quotes: dict[str, BidAskQuote] | None = None
     if adapter is not None:
         bid_ask_quotes = {}
         for symbol in symbols:

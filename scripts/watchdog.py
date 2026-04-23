@@ -105,7 +105,8 @@ def run_with_watchdog(
         if proc.poll() is None:
             ts = datetime.now(UTC).strftime("%H:%M:%S")
             with lock:
-                output_parts.append(f"[{ts}] ⚠ WATCHDOG: 命令执行超过 {joined_timeout:.0f}s，仍在运行...")
+                msg = f"[{ts}] ⚠ WATCHDOG: 命令执行超过 {joined_timeout:.0f}s，仍在运行..."
+                output_parts.append(msg)
             time.sleep(max(10, timeout - joined_timeout))
 
         if proc.poll() is None:
@@ -271,8 +272,6 @@ class TaskTracker:
         """Print a compact progress bar to stderr (doesn't pollute output capture)."""
         total = len(self.tasks)
         done = sum(1 for t in self.tasks if t.status in (TaskStatus.DONE, TaskStatus.SKIPPED))
-        running = sum(1 for t in self.tasks if t.status == TaskStatus.RUNNING)
-        failed = sum(1 for t in self.tasks if t.status == TaskStatus.FAILED)
 
         bar_len = 40
         filled = int(bar_len * done / max(total, 1))

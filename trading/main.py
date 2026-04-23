@@ -1,6 +1,5 @@
 import asyncio
-from collections.abc import Callable
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI

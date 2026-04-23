@@ -85,13 +85,13 @@ class TestCCI:
 
 class TestStochastic:
     def test_stochastic_length(self):
-        h = l = c = _float_series([100.0] * 20)
-        result = stochastic(h, l, c, k=14, d=3)
+        h = low = c = _float_series([100.0] * 20)
+        result = stochastic(h, low, c, k=14, d=3)
         assert len(result["k"]) == len(c)
 
     def test_stochastic_nan_warmup(self):
-        h = l = c = _float_series([100.0] * 20)
-        result = stochastic(h, l, c, k=14)
+        h = low = c = _float_series([100.0] * 20)
+        result = stochastic(h, low, c, k=14)
         # Stochastic %K is filled with 0 for insufficient warmup
         # After k period it should be non-zero for flat price
         assert result["k"].iloc[-1] == 0.0
@@ -116,8 +116,8 @@ class TestBollingerBands:
 
 class TestKeltnerChannel:
     def test_kc_shape(self):
-        h = l = c = _float_series([100.0] * 25)
-        result = keltner_channel(h, l, c)
+        h = low = c = _float_series([100.0] * 25)
+        result = keltner_channel(h, low, c)
         assert len(result["middle"]) == len(h)
 
 
@@ -137,57 +137,57 @@ class TestOBV:
 
 class TestVWAP:
     def test_vwap_length(self):
-        h = l = c = _float_series([100.0] * 5)
+        h = low = c = _float_series([100.0] * 5)
         v = _float_series([1000.0] * 5)
-        result = vwap(h, l, c, v)
+        result = vwap(h, low, c, v)
         assert len(result) == len(h)
 
     def test_vwap_mismatched_lengths(self):
-        h = l = c = _float_series([100.0] * 5)
+        h = low = c = _float_series([100.0] * 5)
         v = _float_series([1000.0] * 3)
         with pytest.raises(ValueError):
-            vwap(h, l, c, v)
+            vwap(h, low, c, v)
 
 
 class TestADX:
     def test_adx_length(self):
-        h = l = c = _float_series([100.0] * 40)
-        result = adx(h, l, c, period=14)
+        h = low = c = _float_series([100.0] * 40)
+        result = adx(h, low, c, period=14)
         assert len(result["adx"]) == len(h)
 
     def test_adx_raises_invalid_period(self):
-        h = l = c = _float_series([100.0] * 5)
+        h = low = c = _float_series([100.0] * 5)
         with pytest.raises(ValueError):
-            adx(h, l, c, period=0)
+            adx(h, low, c, period=0)
 
 
 class TestSupertrend:
     def test_supertrend_length(self):
-        h = l = c = _float_series([100.0] * 20)
-        result = supertrend(h, l, c, period=10)
+        h = low = c = _float_series([100.0] * 20)
+        result = supertrend(h, low, c, period=10)
         assert len(result["direction"]) == len(h)
 
     def test_supertrend_direction_values(self):
-        h = l = c = _float_series([100.0] * 20)
-        result = supertrend(h, l, c, period=10)
+        h = low = c = _float_series([100.0] * 20)
+        result = supertrend(h, low, c, period=10)
         values = result["direction"].dropna().unique()
         assert set(values).issubset({1.0, -1.0})
 
 
 class TestAroon:
     def test_aroon_length(self):
-        h = l = _float_series([100.0] * 30)
-        result = aroon(h, l, period=25)
+        h = low = _float_series([100.0] * 30)
+        result = aroon(h, low, period=25)
         assert len(result["aroon_up"]) == len(h)
 
     def test_aroon_nan_warmup(self):
-        h = l = _float_series([100.0] * 30)
-        result = aroon(h, l, period=25)
+        h = low = _float_series([100.0] * 30)
+        result = aroon(h, low, period=25)
         assert result["aroon_up"].iloc[:25].isna().all()
 
     def test_aroon_oscillator_range(self):
-        h = l = _float_series([100.0] * 30)
-        result = aroon(h, l, period=25)
+        h = low = _float_series([100.0] * 30)
+        result = aroon(h, low, period=25)
         valid = result["aroon_oscillator"].dropna()
         assert (valid >= -100).all()
         assert (valid <= 100).all()

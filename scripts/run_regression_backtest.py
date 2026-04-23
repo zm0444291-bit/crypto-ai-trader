@@ -517,7 +517,7 @@ def main() -> None:
 
     # Print signal counts
     adapter = None
-    for name, obj in sorted(locals().items(), key=lambda x: str(type(x[1]))):
+    for _name, obj in sorted(locals().items(), key=lambda x: str(type(x[1]))):
         if hasattr(obj, "_signal_counts"):
             adapter = obj
             break

@@ -19,12 +19,11 @@ if TYPE_CHECKING:
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from trading.market_data.adapters.base import BidAskQuote
-
 from trading.ai.scorer import AIScorer
 from trading.execution.gate import ExecutionGate
 from trading.execution.paper_executor import PaperExecutionResult, PaperExecutor
 from trading.features.builder import CandleFeatures, build_features
+from trading.market_data.adapters.base import BidAskQuote
 from trading.portfolio.accounting import Position
 from trading.risk.position_sizing import PositionSizeResult, calculate_position_size
 from trading.risk.pre_trade import (

@@ -1,5 +1,4 @@
 """Integration tests for /health endpoint (routes_health.py)."""
-"""Integration tests for /health endpoint (routes_health.py)."""
 import os
 import tempfile
 from datetime import UTC, datetime

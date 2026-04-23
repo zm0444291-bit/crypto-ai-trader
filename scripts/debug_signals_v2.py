@@ -30,8 +30,6 @@ def main():
     from trading.strategies.active.market_regime import detect_market_regime
 
     strat = BreakoutStrategy(lookback=20, trailing_stop_pct=0.02, max_holding_bars=48)
-
-    in_pos = False
     entry_price = 0.0
     trades = []
 
