@@ -126,8 +126,8 @@ class EMATrendFilter:
         ema_l = closes.ewm(span=self.long, adjust=False).mean()
         in_pos = self._in_pos.get(symbol, False)
 
-        bull = bool((ema_s.iloc[-1] > ema_m.iloc[-1] > ema_l.iloc[-1]))
-        prev_bull = bool((ema_s.iloc[-2] > ema_m.iloc[-2] > ema_l.iloc[-2]))
+        bull = bool(ema_s.iloc[-1] > ema_m.iloc[-1] > ema_l.iloc[-1])
+        prev_bull = bool(ema_s.iloc[-2] > ema_m.iloc[-2] > ema_l.iloc[-2])
 
         if not in_pos and bull and not prev_bull:
             self._in_pos[symbol] = True
@@ -163,7 +163,7 @@ class ATRTrendFollower:
         entry_price = state["entry"] if in_pos else None
         entry_atr = state["atr"] if in_pos else None
 
-        entry_bar = bool((close.iloc[-1] > close.ewm(span=20, adjust=False).mean().iloc[-1]))
+        entry_bar = bool(close.iloc[-1] > close.ewm(span=20, adjust=False).mean().iloc[-1])
 
         if not in_pos and entry_bar:
             self._in_pos[symbol] = {"entry": float(close.iloc[-1]), "atr": atr}
@@ -197,7 +197,8 @@ class SessionFilter:
         # US session: 13:30-21:00 UTC (overlap of NY London)
         if self.us_session_only and not (13 <= hour < 21):
             return []
-        return self.inner.generate_signals(symbol, df)
+        signals: list[Signal] = self.inner.generate_signals(symbol, df)
+        return signals
 
 
 # ─── Run backtest ──────────────────────────────────────────────────────────────

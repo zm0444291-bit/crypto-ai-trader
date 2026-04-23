@@ -12,8 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from pathlib import Path
 from itertools import product
+from pathlib import Path
 
 import pandas as pd
 
@@ -180,7 +180,7 @@ GRIDS = {
         "EMA_Crossover": list(product([10, 15, 20, 25, 30], [40, 50, 60, 80])),
         "EMA_Triple": list(product([10, 15, 20], [30, 50], [150, 200, 250])),
         "ATR_Trend": list(product([7, 14, 21], [1.5, 2.0, 2.5, 3.0])),
-        "Donchian": [(l,) for l in [10, 20, 30, 40, 50, 60, 80, 100]],
+        "Donchian": [(n,) for n in [10, 20, 30, 40, 50, 60, 80, 100]],
         "RSI": list(product([7, 14], [25, 30, 35], [65, 70, 75])),
     },
     "EURUSD": {
@@ -240,7 +240,7 @@ def run_grid(instr: str, strat_name: str, params_list: list, make_strategy, stor
                 max_dd_pct=float(res.max_drawdown_pct),
                 win_rate=float(res.win_rate),
             ))
-        except Exception as e:
+        except Exception:
             pass  # skip bad params silently
     return results
 
