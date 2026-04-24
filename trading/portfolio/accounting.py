@@ -13,6 +13,7 @@ class Position(BaseModel):
     fees_paid_usdt: Decimal = Field(default=Decimal("0"), ge=0)
     opened_at: datetime | None = None
     stop_reference: Decimal | None = None
+    entry_atr: Decimal | None = None  # ATR value at position open (used for exit calculations)
 
 
 class PortfolioAccount(BaseModel):
@@ -116,8 +117,9 @@ class PortfolioAccount(BaseModel):
         return self.cash_balance + position_value
 
     def unrealized_pnl(self, market_prices: dict[str, Decimal]) -> Decimal:
-        return sum(
-            position.qty
-            * (market_prices.get(symbol, position.avg_entry_price) - position.avg_entry_price)
-            for symbol, position in self.positions.items()
-        )
+        total = Decimal("0")
+        for symbol, position in self.positions.items():
+            total += position.qty * (
+                market_prices.get(symbol, position.avg_entry_price) - position.avg_entry_price
+            )
+        return total

@@ -1,0 +1,50 @@
+# strategy_params_forex.yaml
+# Forex trading strategy parameters
+
+strategy:
+  name: TrendFollowerV2
+  version: 2.1.0
+  description: Multi-timeframe trend following with RSI confirmation
+
+timeframes:
+  primary: H1
+  secondary: H4
+  confirmation: D1
+
+entry_rules:
+  trend_alignment: true
+  min_rsi: 30
+  max_rsi: 70
+  rsi_period: 14
+  atr_multiplier: 1.5
+  atr_period: 14
+
+risk_management:
+  max_position_size: 5.0  # lots
+  max_daily_loss: 500.0  # USD
+  max_drawdown: 1000.0  # USD
+  reward_to_risk: 2.0
+
+trade_filters:
+  min_spread_pips: 1.5
+  max_spread_pips: 10.0
+  news_filter_enabled: true
+  trading_hours:
+    start: "08:00"
+    end: "20:00"
+    timezone: "UTC"
+
+indicators:
+  moving_average_fast: 20
+  moving_average_slow: 50
+  moving_average_type: EMA
+  rsi_oversold: 30
+  rsi_overbought: 70
+  volatility_filter: true
+  adx_threshold: 25
+
+position_sizing:
+  method: fixed_fractional
+  risk_per_trade: 0.01  # 1% of account
+  min_lot: 0.01
+  max_lot: 50.0

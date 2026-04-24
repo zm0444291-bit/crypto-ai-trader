@@ -27,7 +27,7 @@ def ema(values: list[Decimal], period: int) -> list[Decimal | None]:
     result[period - 1] = seed
 
     for i in range(period, n):
-        result[i] = (values[i] - result[i - 1]) * multiplier + result[i - 1]
+        result[i] = (values[i] - result[i - 1]) * multiplier + result[i - 1]  # type: ignore[operator]
 
     return result
 
@@ -138,6 +138,6 @@ def atr(
 
     # Subsequent ATRs: smoothed
     for i in range(period, n):
-        result[i] = (result[i - 1] * Decimal(period - 1) + tr_list[i]) / Decimal(period)
+        result[i] = (result[i - 1] * Decimal(period - 1) + tr_list[i]) / Decimal(period)  # type: ignore[operator]
 
     return result

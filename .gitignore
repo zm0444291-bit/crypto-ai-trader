@@ -34,3 +34,7 @@ build/
 
 # Claude Code local state
 .omc/
+
+# Backtest results
+scripts/*.json
+!scripts/README.md

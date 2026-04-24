@@ -1,5 +1,6 @@
 from datetime import UTC
 from decimal import Decimal, InvalidOperation
+from typing import Literal, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -63,7 +64,7 @@ def _to_paper_fill(fill: Fill) -> PaperFill:
         raise HTTPException(status_code=400, detail="portfolio rebuild only supports BUY fills")
     return PaperFill(
         symbol=fill.symbol,
-        side=fill.side,
+        side=cast(Literal["BUY", "SELL"], fill.side),
         price=fill.price,
         qty=fill.qty,
         fee_usdt=fill.fee_usdt,

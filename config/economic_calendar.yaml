@@ -1,0 +1,114 @@
+# Economic Calendar — High/Medium impact events for XAUUSD/EURUSD trading
+# Format: YYYY-MM-DD HH:MM in UTC
+# Impact: high | medium
+# Symbols: list of affected trading symbols
+
+high_impact:
+  # US Non-Farm Payrolls (NFP) — first Friday of month, 14:00 UTC
+  - date: "2025-06-06 14:00"
+    name: "NFP"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-07-03 14:00"
+    name: "NFP"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-08-08 14:00"
+    name: "NFP"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-09-05 14:00"
+    name: "NFP"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-10-03 14:00"
+    name: "NFP"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-11-07 14:00"
+    name: "NFP"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-12-05 14:00"
+    name: "NFP"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  # US CPI — mid-month, 14:30 UTC
+  - date: "2025-06-11 14:30"
+    name: "CPI"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-07-10 14:30"
+    name: "CPI"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-08-13 14:30"
+    name: "CPI"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-09-11 14:30"
+    name: "CPI"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-10-10 14:30"
+    name: "CPI"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-11-13 14:30"
+    name: "CPI"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-12-10 14:30"
+    name: "CPI"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  # FOMC Meetings — 19:00 UTC (60-min blackout)
+  - date: "2025-06-18 19:00"
+    name: "FOMC"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-07-30 19:00"
+    name: "FOMC"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-09-17 19:00"
+    name: "FOMC"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-11-05 19:00"
+    name: "FOMC"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-12-17 19:00"
+    name: "FOMC"
+    symbols: ["XAUUSD", "EURUSD"]
+
+medium_impact:
+  # US Retail Sales — mid-month, 14:30 UTC
+  - date: "2025-06-17 14:30"
+    name: "Retail Sales"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-07-16 14:30"
+    name: "Retail Sales"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-08-15 14:30"
+    name: "Retail Sales"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-09-16 14:30"
+    name: "Retail Sales"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-10-16 14:30"
+    name: "Retail Sales"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-11-14 14:30"
+    name: "Retail Sales"
+    symbols: ["XAUUSD", "EURUSD"]
+
+  - date: "2025-12-16 14:30"
+    name: "Retail Sales"
+    symbols: ["XAUUSD", "EURUSD"]

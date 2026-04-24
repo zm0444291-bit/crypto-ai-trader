@@ -10,7 +10,11 @@ import uuid
 from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from trading.market_data.adapters.base import BidAskQuote
+    from trading.market_data.schemas import CandleData
 
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -19,6 +23,7 @@ from trading.ai.scorer import AIScorer
 from trading.execution.gate import ExecutionGate
 from trading.execution.paper_executor import PaperExecutionResult, PaperExecutor
 from trading.features.builder import CandleFeatures, build_features
+from trading.market_data.adapters.base import BidAskQuote
 from trading.portfolio.accounting import Position
 from trading.risk.position_sizing import PositionSizeResult, calculate_position_size
 from trading.risk.pre_trade import (
@@ -37,6 +42,7 @@ from trading.storage.repositories import (
 from trading.strategies.active.multi_timeframe_momentum import (
     generate_momentum_candidate,
 )
+from trading.strategies.active.strategy_selector import StrategySelector
 from trading.strategies.exits import ExitEngine, ExitSignal
 
 # ── Lifecycle stages ──────────────────────────────────────────────────────────
@@ -56,7 +62,7 @@ LIFECYCLE_STAGES = (
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
-def _orm_candle_to_data(candle: Any):
+def _orm_candle_to_data(candle: Any) -> "CandleData":
     """Convert an ORM Candle row to a CandleData for build_features."""
     from trading.market_data.schemas import CandleData
 
@@ -118,6 +124,9 @@ class CycleInput(BaseModel):
     day_start_equity: Decimal
     account_equity: Decimal
     market_prices: dict[str, Decimal]
+    # Optional real-time bid/ask quotes for precise execution pricing.
+    # When provided, execution uses bid/ask instead of mid price.
+    bid_ask_quotes: dict[str, "BidAskQuote"] | None = None
     total_position_pct: Decimal
     symbol_position_pct: Decimal
     open_positions: int
@@ -176,12 +185,20 @@ def _run_exit_scan(
     if market_price is None:
         return None, False, event_ids
 
+    # Use bid/ask quote for execution when available, otherwise fall back to mid
+    exec_price: BidAskQuote | Decimal = (
+        input_data.bid_ask_quotes.get(input_data.symbol, market_price)
+        if input_data.bid_ask_quotes is not None
+        else market_price
+    )
+
     # ── exit_evaluated (signal found) ─────────────────────────────────────
     exit_signal = exit_engine.evaluate(
         symbol=input_data.symbol,
         position_qty=position.qty,
         position_avg_entry=position.avg_entry_price,
         position_stop=position.stop_reference,
+        position_entry_atr=position.entry_atr,
         market_price=market_price,
         current_time=input_data.now,
         position_opened_at=position.opened_at or input_data.now,
@@ -234,11 +251,11 @@ def _run_exit_scan(
     )
     event_ids.append(exit_gen_ev.id)
 
-    # Execute the sell
+    # Execute the sell — use bid/ask quote for precise pricing
     exec_result = executor.execute_market_sell(
         symbol=input_data.symbol,
         qty=exit_signal.qty_to_exit,
-        market_price=market_price,
+        market_price=exec_price,
         executed_at=input_data.now,
     )
 
@@ -290,6 +307,7 @@ def run_paper_cycle(
     session_factory: Callable[[], Session],
     min_notional_usdt: Decimal = Decimal("10"),
     exit_engine: ExitEngine | None = None,
+    strategy_selector: StrategySelector | None = None,
 ) -> CycleResult:
     """Run a full paper trading cycle for one symbol.
 
@@ -408,14 +426,25 @@ def run_paper_cycle(
         features_1h = build_features([_orm_candle_to_data(c) for c in candles_1h])
         features_4h = build_features([_orm_candle_to_data(c) for c in candles_4h])
 
-    # ── Stage 2: strategy candidate ──────────────────────────────────────────
-    candidate = generate_momentum_candidate(
-        symbol=input_data.symbol,
-        features_15m=features_15m,
-        features_1h=features_1h,
-        features_4h=features_4h,
-        now=input_data.now,
-    )
+    # ── Stage 2: strategy candidate (via StrategySelector with regime routing) ────
+    # Default to legacy momentum if no selector provided (backwards compatibility)
+    if strategy_selector is not None:
+        candidate = strategy_selector.select_candidate(
+            symbol=input_data.symbol,
+            features_15m=features_15m,
+            features_1h=features_1h,
+            features_4h=features_4h,
+            now=input_data.now,
+        )
+    else:
+        # Legacy fallback — single momentum strategy (backwards compat only)
+        candidate = generate_momentum_candidate(
+            symbol=input_data.symbol,
+            features_15m=features_15m,
+            features_1h=features_1h,
+            features_4h=features_4h,
+            now=input_data.now,
+        )
 
     if candidate is None:
         finished = events_repo.record_event(
@@ -823,7 +852,7 @@ def run_paper_cycle(
     # ── Stage 7a: shadow execution (live_shadow mode) ────────────────────────
     if gate_decision.route == "shadow":
         simulated_fill_price = market_price * (
-            Decimal("1") + executor.slippage_bps / Decimal("10000")
+            Decimal("1") + executor._slippage_bps(candidate.symbol) / Decimal("10000")
         )
         with session_factory() as shadow_session:
             shadow_repo = ShadowExecutionRepository(shadow_session)
@@ -833,7 +862,7 @@ def run_paper_cycle(
                 planned_notional_usdt=size_result.notional_usdt,
                 reference_price=market_price,
                 simulated_fill_price=simulated_fill_price,
-                simulated_slippage_bps=executor.slippage_bps,
+                simulated_slippage_bps=executor._slippage_bps(candidate.symbol),
                 decision_reason=ai_result.explanation,
                 source_cycle_status="shadow_recorded",
             )
@@ -852,7 +881,7 @@ def run_paper_cycle(
                 "planned_notional_usdt": str(size_result.notional_usdt),
                 "reference_price": str(market_price),
                 "simulated_fill_price": str(simulated_fill_price),
-                "simulated_slippage_bps": str(executor.slippage_bps),
+                "simulated_slippage_bps": str(executor._slippage_bps(candidate.symbol)),
                 "execution_route": gate_decision.route,
             },
             trace_id=trace_id,
@@ -897,10 +926,16 @@ def run_paper_cycle(
         )
 
     # ── Stage 7b: paper execution ─────────────────────────────────────────────
+    # Resolve bid/ask quote for precise execution pricing when available
+    exec_price: BidAskQuote | Decimal = (
+        input_data.bid_ask_quotes.get(input_data.symbol, market_price)
+        if input_data.bid_ask_quotes is not None
+        else market_price
+    )
     exec_result: PaperExecutionResult = executor.execute_market_buy(
         candidate=candidate,
         position_size=size_result,
-        market_price=market_price,
+        market_price=exec_price,
         executed_at=input_data.now,
     )
 

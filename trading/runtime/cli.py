@@ -18,6 +18,7 @@ from decimal import Decimal
 from trading.ai.http_client import HttpAIScoringClient
 from trading.ai.minimax_client import MiniMaxAIScoringClient
 from trading.ai.scorer import AIScorer
+from trading.logging_config import setup_logging
 from trading.runtime.runner import (
     create_runner_session_factory,
     run_loop,
@@ -29,11 +30,7 @@ from trading.runtime.supervisor import (
     run_supervisor,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
+setup_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 

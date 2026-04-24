@@ -1,0 +1,18 @@
+# Exit rules configuration for ExitEngine
+#
+# ATR multipliers: raw multiplier (e.g. 2.0 = 2x ATR)
+# Time exit pct: decimal fraction (0.5 = 50% of position)
+#
+exit_rules:
+  hard_stop:
+    atr_multiplier: 2.0
+  take_profit:
+    atr_multiplier: 3.0
+  time_exit:
+    max_hold_hours: 24
+    partial_exit_pct: 0.5
+  # Trailing stop (future expansion — not yet implemented)
+  trailing_stop:
+    enabled: false
+    activation_profit_pct: 0.05
+    trail_distance_pct: 0.02

@@ -1,5 +1,6 @@
 """Runtime state backed by SQLite (paper-only milestone)."""
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
@@ -7,7 +8,6 @@ from sqlalchemy.orm import Session
 from trading.execution.gate import TRADE_MODES
 
 if TYPE_CHECKING:
-    from sqlalchemy.orm import sessionmaker
 
     from trading.execution.gate import LiveTradingLock
 
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 _DEFAULT_MODE: TRADE_MODES = "paper_auto"
 
 
-def get_trade_mode(session_factory: "sessionmaker[Session]") -> TRADE_MODES:
+def get_trade_mode(session_factory: Callable[[], Session]) -> TRADE_MODES:
     """Return the persisted trade mode for the given session factory.
 
     Uses RuntimeControlRepository to read from the database.
@@ -28,7 +28,7 @@ def get_trade_mode(session_factory: "sessionmaker[Session]") -> TRADE_MODES:
         return repo.get_trade_mode(default=_DEFAULT_MODE)
 
 
-def get_live_trading_lock(session_factory: "sessionmaker[Session]") -> "LiveTradingLock":
+def get_live_trading_lock(session_factory: Callable[[], Session]) -> "LiveTradingLock":
     """Return the persisted live trading lock for the given session factory.
 
     Uses RuntimeControlRepository to read from the database.

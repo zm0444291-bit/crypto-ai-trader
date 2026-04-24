@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 
-_DEFAULT_TIMEOUT: tuple[float, float] = (5.0, 10.0)
+_DEFAULT_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
 
 @dataclass

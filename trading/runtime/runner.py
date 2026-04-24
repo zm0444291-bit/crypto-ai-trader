@@ -3,19 +3,28 @@
 import logging
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from threading import Event as ThreadingEvent
 
 from sqlalchemy.orm import Session
 
 from trading.ai.scorer import AIScorer
+from trading.dashboard_api.ws_manager import broadcast_from_sync
+from trading.events.economic_calendar import (
+    EconomicCalendar,
+    load_economic_events_from_yaml,
+)
 from trading.execution.paper_executor import PaperExecutor
+from trading.market_data.adapters.base import BidAskQuote, MarketDataAdapter
 from trading.market_data.candle_service import SYMBOLS
 from trading.notifications.base import NotificationContext, NotificationLevel, Notifier
 from trading.notifications.dedup import AlertDeduplicator
 from trading.notifications.log_notifier import LogNotifier
+from trading.notifications.telegram_notifier import TelegramNotifier
 from trading.portfolio.accounting import PortfolioAccount
+from trading.risk.risk_monitor import RiskMonitor
 from trading.runtime.paper_cycle import CycleInput, CycleResult, run_paper_cycle
 from trading.storage.db import create_database_engine, create_session_factory, init_db
 from trading.storage.models import Candle
@@ -24,7 +33,11 @@ from trading.storage.repositories import (
     EventsRepository,
     ExecutionRecordsRepository,
 )
-from trading.strategies.exits import ExitEngine
+from trading.strategies.active.strategy_selector import StrategySelector
+from trading.strategies.exits import ExitEngine, load_exit_rules_from_yaml
+
+# Derive config directory relative to this file (project_root / config)
+_CONFIG_DIR = Path(__file__).parent.parent.parent / "config"
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +48,195 @@ DEFAULT_MIN_NOTIONAL = Decimal("10")
 
 # Data freshness threshold: a 15m candle is considered stale after this many seconds
 STALE_THRESHOLD_SECONDS = 1800  # 30 minutes
+
+
+# ── API Failure Degradation ───────────────────────────────────────────────────
+
+
+class APIFailureDegradation:
+    """Per-symbol API failure tracker with progressive freeze.
+
+    Tracks market-data and order failures independently per symbol.
+    After the configured number of consecutive failures the symbol is
+    frozen for a cooldown period, during which it is skipped by the
+    trading loop.
+
+    Telegram alerts are sent on freeze events (deduplicated externally).
+    """
+
+    def __init__(
+        self,
+        market_data_freeze_threshold: int = 3,
+        market_data_freeze_minutes: int = 30,
+        order_failure_freeze_threshold: int = 3,
+        order_failure_freeze_minutes: int = 60,
+        telegram_notifier: TelegramNotifier | None = None,
+    ) -> None:
+        self._market_data_freeze_threshold = market_data_freeze_threshold
+        self._market_data_freeze_minutes = market_data_freeze_minutes
+        self._order_failure_freeze_threshold = order_failure_freeze_threshold
+        self._order_failure_freeze_minutes = order_failure_freeze_minutes
+        self._telegram: TelegramNotifier | None = telegram_notifier
+
+        # Failure counters: symbol -> consecutive failure count
+        self._market_data_failures: dict[str, int] = {}
+        self._order_failures: dict[str, int] = {}
+
+        # Freeze state: symbol -> UTC datetime when freeze expires
+        self._market_data_frozen_until: dict[str, datetime] = {}
+        self._order_frozen_until: dict[str, datetime] = {}
+
+    # ── Market-data failure handling ─────────────────────────────────────────
+
+    def handle_market_data_failure(
+        self,
+        symbol: str,
+        now: datetime | None = None,
+    ) -> str:
+        """Record one market-data API failure for *symbol*.
+
+        Returns one of:
+          - "retry"  — failure recorded but symbol not yet frozen
+          - "frozen" — freeze threshold reached; symbol now frozen
+        """
+        if now is None:
+            now = datetime.now(UTC)
+
+        count = self._market_data_failures.get(symbol, 0) + 1
+        self._market_data_failures[symbol] = count
+
+        if count >= self._market_data_freeze_threshold:
+            freeze_minutes = self._market_data_freeze_minutes
+            self._market_data_frozen_until[symbol] = now.replace(
+                microsecond=0
+            ) + timedelta(minutes=freeze_minutes)
+            self._market_data_failures[symbol] = 0  # reset counter after freeze
+            self._send_alert(
+                level="WARNING",
+                title=f"[API] {symbol} market-data frozen",
+                message=(
+                    f"Market-data failures reached {count} for {symbol}. "
+                    f"Trading frozen for {freeze_minutes} min."
+                ),
+                context={"event_type": "market_data_freeze", "symbol": symbol},
+            )
+            return "frozen"
+
+        return "retry"
+
+    # ── Order failure handling ───────────────────────────────────────────────
+
+    def handle_order_failure(
+        self,
+        symbol: str,
+        is_rate_limited: bool = False,
+        now: datetime | None = None,
+    ) -> str:
+        """Record one order API failure for *symbol*.
+
+        Args:
+            symbol: trading symbol
+            is_rate_limited: True when the exchange signalled rate-limiting
+            now: current UTC datetime (defaults to datetime.now(UTC))
+
+        Returns one of:
+          - "retry"  — rate-limited; caller should retry without incrementing
+          - "retry_counted" — non-rate-limit failure recorded, not yet frozen
+          - "frozen" — freeze threshold reached; symbol now frozen
+          - "abort"  — rate-limited failure should NOT be retried this cycle
+        """
+        if now is None:
+            now = datetime.now(UTC)
+
+        # Rate-limited failures never count against the freeze counter;
+        # the caller is expected to back off and retry.
+        if is_rate_limited:
+            return "retry"  # caller backs off; no counter increment
+
+        count = self._order_failures.get(symbol, 0) + 1
+        self._order_failures[symbol] = count
+
+        if count >= self._order_failure_freeze_threshold:
+            freeze_minutes = self._order_failure_freeze_minutes
+            self._order_frozen_until[symbol] = now.replace(
+                microsecond=0
+            ) + timedelta(minutes=freeze_minutes)
+            self._order_failures[symbol] = 0  # reset counter after freeze
+            self._send_alert(
+                level="ERROR",
+                title=f"[API] {symbol} order failures frozen",
+                message=(
+                    f"Order failures reached {count} for {symbol}. "
+                    f"Trading frozen for {freeze_minutes} min."
+                ),
+                context={"event_type": "order_failure_freeze", "symbol": symbol},
+            )
+            return "frozen"
+
+        return "retry_counted"
+
+    # ── Freeze status ───────────────────────────────────────────────────────
+
+    def is_symbol_frozen(self, symbol: str, now: datetime | None = None) -> bool:
+        """Return True when *symbol* is currently in a freeze window."""
+        if now is None:
+            now = datetime.now(UTC)
+
+        # Unfreeze if cooldown has elapsed
+        mkt_until = self._market_data_frozen_until.get(symbol)
+        if mkt_until is not None and now >= mkt_until:
+            del self._market_data_frozen_until[symbol]
+            mkt_until = None
+
+        order_until = self._order_frozen_until.get(symbol)
+        if order_until is not None and now >= order_until:
+            del self._order_frozen_until[symbol]
+            order_until = None
+
+        return mkt_until is not None or order_until is not None
+
+    def market_data_frozen_minutes_remaining(
+        self, symbol: str, now: datetime | None = None
+    ) -> int:
+        """Seconds until market-data freeze expires (0 if not frozen)."""
+        if now is None:
+            now = datetime.now(UTC)
+        until = self._market_data_frozen_until.get(symbol)
+        if until is None or now >= until:
+            return 0
+        return int((until - now).total_seconds())
+
+    def order_frozen_minutes_remaining(
+        self, symbol: str, now: datetime | None = None
+    ) -> int:
+        """Seconds until order freeze expires (0 if not frozen)."""
+        if now is None:
+            now = datetime.now(UTC)
+        until = self._order_frozen_until.get(symbol)
+        if until is None or now >= until:
+            return 0
+        return int((until - now).total_seconds())
+
+    # ── Internal helpers ─────────────────────────────────────────────────────
+
+    def _send_alert(
+        self,
+        level: str,
+        title: str,
+        message: str,
+        context: dict[str, object] | None = None,
+    ) -> None:
+        """Send a Telegram alert if the notifier is configured."""
+        if self._telegram is None:
+            return
+        try:
+            from trading.notifications.base import NotificationContext, NotificationLevel
+
+            notif_level = NotificationLevel(level.lower())
+            ctx: NotificationContext = (context or {}).copy()  # type: ignore[assignment]
+            self._telegram.notify(notif_level, title, message, ctx)
+        except Exception:
+            logger.exception("Failed to send freeze alert for %s", title)
 
 
 def _get_or_create_day_baseline(
@@ -75,8 +277,13 @@ def _build_cycle_inputs(
     symbols: list[str],
     now: datetime,
     initial_cash_usdt: Decimal,
-) -> list[CycleInput]:
-    """Build CycleInput for each symbol using live DB state."""
+    adapter: MarketDataAdapter | None = None,
+) -> tuple[list[CycleInput], Decimal, Decimal]:
+    """Build CycleInput for each symbol using live DB state.
+
+    Returns:
+        tuple of (inputs list, current account equity, day start equity).
+    """
 
     exec_repo = ExecutionRecordsRepository(session)
     candles_repo = CandlesRepository(session)
@@ -89,7 +296,7 @@ def _build_cycle_inputs(
 
         pf = PaperFill(
             symbol=fill.symbol,
-            side=fill.side,
+            side=fill.side,  # type: ignore[arg-type]
             price=fill.price,
             qty=fill.qty,
             fee_usdt=fill.fee_usdt,
@@ -109,6 +316,17 @@ def _build_cycle_inputs(
         if latest is not None:
             market_prices[symbol] = Decimal(str(latest.close))
             latest_candles[symbol] = latest
+
+    # Fetch real-time bid/ask quotes when adapter is available
+    bid_ask_quotes: dict[str, BidAskQuote] | None = None
+    if adapter is not None:
+        bid_ask_quotes = {}
+        for symbol in symbols:
+            try:
+                quote = adapter.get_bid_ask(symbol)
+                bid_ask_quotes[symbol] = quote
+            except Exception:
+                pass  # Fall back to mid-price via market_prices when quote unavailable
 
     # Determine data freshness: fresh if latest 15m candle is within 30 minutes
     latest_ts = next((c.open_time for c in latest_candles.values()), None)
@@ -185,6 +403,7 @@ def _build_cycle_inputs(
                 day_start_equity=day_start_equity,
                 account_equity=account_equity,
                 market_prices=market_prices,
+                bid_ask_quotes=bid_ask_quotes,
                 total_position_pct=total_position_pct,
                 symbol_position_pct=sym_position_pct,
                 open_positions=len(account.positions),
@@ -197,7 +416,7 @@ def _build_cycle_inputs(
             )
         )
 
-    return inputs
+    return inputs, account_equity, day_start_equity
 
 
 def run_once(
@@ -210,6 +429,7 @@ def run_once(
     min_notional: Decimal = DEFAULT_MIN_NOTIONAL,
     notifier: Notifier | None = None,
     deduplicator: AlertDeduplicator | None = None,
+    adapter: MarketDataAdapter | None = None,
 ) -> list[CycleResult]:
     """Run one paper trading cycle for all configured symbols.
 
@@ -218,8 +438,15 @@ def run_once(
     if symbols is None:
         symbols = SYMBOLS
 
-    executor = PaperExecutor(fee_bps=fee_bps, slippage_bps=slippage_bps)
-    exit_engine = ExitEngine()
+    executor = PaperExecutor(
+        fee_bps=fee_bps,
+        slippage_tiers={
+            "default": slippage_bps,
+            "XAUUSD": slippage_bps,
+            "EURUSD": slippage_bps,
+        },
+    )
+    exit_engine = ExitEngine(config=load_exit_rules_from_yaml(_CONFIG_DIR / "exit_rules.yaml"))
     now = datetime.now(UTC)
     results: list[CycleResult] = []
     notify = notifier or LogNotifier()
@@ -238,7 +465,14 @@ def run_once(
             context={"symbols": symbols, "mode": "paper_only"},
         )
 
-        inputs = _build_cycle_inputs(session, symbols, now, initial_cash_usdt)
+        inputs, account_equity, day_start_equity = _build_cycle_inputs(
+            session, symbols, now, initial_cash_usdt, adapter=adapter
+        )
+
+        economic_calendar = EconomicCalendar(
+            events=load_economic_events_from_yaml(_CONFIG_DIR / "economic_calendar.yaml")
+        )
+        strategy_selector = StrategySelector(symbols=symbols, economic_calendar=economic_calendar)
 
         for input_data in inputs:
             try:
@@ -251,6 +485,7 @@ def run_once(
                     session_factory=session_factory,
                     min_notional_usdt=min_notional,
                     exit_engine=exit_engine,
+                    strategy_selector=strategy_selector,
                 )
                 results.append(result)
             except Exception as exc:
@@ -300,6 +535,48 @@ def run_once(
             component="runner",
             message="Paper trading loop iteration finished",
             context={"cycles_run": len(results)},
+        )
+
+    # ── Risk monitoring ────────────────────────────────────────────────────
+    # RiskMonitor evaluates equity drawdown and broadcasts risk_state_changed
+    # events to the dashboard WS on transitions (normal → degraded → no_new_positions etc.)
+    risk_monitor = RiskMonitor(day_start_equity=day_start_equity)
+    risk_monitor.update_equity(account_equity)  # triggers evaluation + potential WS broadcast
+
+    # Send Telegram alert when risk state transitions to degraded or worse.
+    # Only notify on transition (not every cycle) to avoid spam.
+    equity_alert = risk_monitor.check_equity_alert()
+    if equity_alert is not None and dedup.should_notify(
+        event_type="risk_state_change",
+        component="risk_monitor",
+        symbol=None,
+    ):
+        level_map = {
+            "degraded": NotificationLevel.WARNING,
+            "no_new_positions": NotificationLevel.ERROR,
+            "global_pause": NotificationLevel.CRITICAL,
+        }
+        notify.notify(
+            level_map.get(equity_alert.risk_state, NotificationLevel.WARNING),
+            f"Risk alert: {equity_alert.risk_state}",
+            equity_alert.message,
+            {"risk_state": equity_alert.risk_state},
+        )
+
+    # ── WebSocket broadcast ────────────────────────────────────────────────
+    # Dispatch summary to all connected dashboard clients.  We broadcast after
+    # the session closes so this never blocks the DB transaction.
+    if results:
+        executed = [r for r in results if r.order_executed]
+        broadcast_from_sync(
+            "all",
+            "cycle_complete",
+            {
+                "cycles_run": len(results),
+                "executed_count": len(executed),
+                "symbols": [r.symbol for r in results],
+                "statuses": {r.symbol: r.status for r in results},
+            },
         )
 
     return results

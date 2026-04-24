@@ -1,0 +1,22 @@
+# Execution engine configuration for paper trading.
+
+# Slippage tiers per symbol in basis points (bps).
+# slippage = quantity * tier_bps / 10000
+# Example: BTCUSDT with tier 5 bps, buying 0.01 BTC = 0.01 * 5 / 10000 = 0.000005 USDT
+slippage_tiers:
+  # Crypto (legacy)
+  BTCUSDT: 5
+  ETHUSDT: 10
+  SOLUSDT: 25
+  # Forex / Commodities — tight spreads, lower slippage
+  XAUUSD: 3   # Gold: ~0.3 pip = 3 bps
+  EURUSD: 1   # Major: ~0.1 pip = 1 bps
+  GBPUSD: 2
+  USDJPY: 2
+  default: 15
+
+# Maker/taker fee in bps
+fee_bps: 10
+
+# Minimum order notional in USDT
+min_notional: 10

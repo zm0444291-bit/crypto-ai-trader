@@ -9,7 +9,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import yaml
 from fastapi import APIRouter, Request
@@ -334,8 +334,8 @@ def read_runtime_status() -> RuntimeStatusResponse:
                 if last_restart_time is None and t is not None:
                     last_restart_time = t.isoformat()
 
-                ctx: dict[str, Any] = e.context_json or {}
-                component = str(ctx.get("component", "")).lower()
+                event_ctx = e.context_json or {}
+                component = str(event_ctx.get("component", "")).lower()
                 if e.event_type == "component_restart_attempted":
                     if t is not None and t >= one_hour_ago:
                         if component == "ingestion":
@@ -458,7 +458,7 @@ class ModeChangeResponse(BaseModel):
     # Machine-readable blocked reason when pre-flight fails (live_small_auto only)
     blocked_reason: str | None = None
     # Individual pre-flight check results (present when to_mode=live_small_auto)
-    preflight_checks: list[dict] = []
+    preflight_checks: list[dict[str, Any]] = []
 
 
 class LiveLockChangeRequest(BaseModel):
@@ -773,7 +773,7 @@ def set_mode(body: ModeChangeRequest) -> ModeChangeResponse:
             )
 
         # Reuse pre-flight result from the check above (no need to re-run)
-        preflight_checks_out: list[dict] = []
+        preflight_checks_out: list[dict[str, Any]] = []
         if body.to_mode == "live_small_auto":
             preflight_checks_out = [
                 {"code": c.code, "status": c.status.value, "message": c.message}
@@ -832,7 +832,7 @@ def _resolve_risk_state(session_factory: sessionmaker[Session]) -> ResolvedRiskS
             for fill in fills:
                 pf = PaperFill(
                     symbol=fill.symbol,
-                    side=fill.side,
+                    side=cast(Literal["BUY", "SELL"], fill.side),
                     price=fill.price,
                     qty=fill.qty,
                     fee_usdt=fill.fee_usdt,
@@ -881,7 +881,7 @@ def _load_allowed_symbols() -> list[str]:
         symbols = binance_cfg.get("allowed_symbols", [])
         return [s.upper() for s in symbols]
     except Exception:
-        return None  # Signal config error to caller instead of silently returning []
+        return []  # Config error → no symbols allowed
 
 
 @router.post("/runtime/control-plane/live-lock", response_model=LiveLockChangeResponse)
@@ -1395,7 +1395,7 @@ def _resolve_risk_info(
     events_repo: EventsRepository,
     exec_repo: ExecutionRecordsRepository,
     candles_repo: CandlesRepository,
-) -> dict:
+) -> dict[str, Any]:
     """Resolve full risk info (state + equity numbers) for the release gate.
 
     Returns a dict with keys: risk_state, day_start_equity, current_equity,
@@ -1430,7 +1430,7 @@ def _resolve_risk_info(
         for fill in fills:
             pf = PaperFill(
                 symbol=fill.symbol,
-                side=fill.side,
+                side=cast(Literal["BUY", "SELL"], fill.side),
                 price=fill.price,
                 qty=fill.qty,
                 fee_usdt=fill.fee_usdt,
