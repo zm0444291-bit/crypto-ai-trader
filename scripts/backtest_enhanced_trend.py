@@ -8,12 +8,11 @@ Best config from scan (2026-04-24):
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import pandas as pd
-import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -83,8 +82,9 @@ class EnhancedTrendBacktest:
         self._ema_fast: pd.Series = None  # type: ignore[assignment]
         self._ema_slow: pd.Series = None  # type: ignore[assignment]
         self._adx: pd.Series = None  # type: ignore[assignment]
-        self._atr_vol: pd.Series = None  # type: ignore[assignment]
-        self._ema_vol: pd.Series = None  # type: ignore[assignment]
+        self._ema_fast_prev: pd.Series = None  # type: ignore[assignment]
+        self._ema_slow_prev: pd.Series = None  # type: ignore[assignment]
+        self._vol_sma: pd.Series = None  # type: ignore[assignment]
 
         self.capital = initial_capital
         self.trades: list[Trade] = []
@@ -143,9 +143,6 @@ class EnhancedTrendBacktest:
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         self._atr = tr.rolling(window=14, min_periods=14).mean()
 
-        # ATR volatility (long-run median for compression detection)
-        self._atr_vol = self._atr.rolling(window=100, min_periods=50).median()
-
         # RSI
         delta = close.diff()
         gain = delta.clip(lower=0).rolling(window=14, min_periods=14).mean()
@@ -153,12 +150,15 @@ class EnhancedTrendBacktest:
         rs = gain / (loss + 1e-9)
         self._rsi = 100 - 100 / (1 + rs)
 
-        # EMA
+        # EMA fast and slow
         self._ema_fast = close.ewm(span=self.ef, adjust=False).mean()
         self._ema_slow = close.ewm(span=self.es, adjust=False).mean()
+        # Previous bar EMA for cross detection
+        self._ema_fast_prev = self._ema_fast.shift(1)
+        self._ema_slow_prev = self._ema_slow.shift(1)
 
-        # Volume EMA for confirmation
-        self._ema_vol = volume.ewm(span=20, adjust=False).mean()
+        # Volume SMA (20-period, scan-compatible)
+        self._vol_sma = volume.rolling(window=20, min_periods=1).mean()
 
         # ADX
         # DX = |(+DI) - (-DI)| / (+DI + -DI) * 100
@@ -174,53 +174,64 @@ class EnhancedTrendBacktest:
         self._adx = dx.ewm(span=14, adjust=False).mean()
 
     # -------------------------------------------------------------------------
-    # Signal generation — enhanced trend
+    # Signal generation — aligned with scan_enhanced_trend.py
+    # Key differences from original:
+    #   - EMA *cross* (not just alignment) for entry trigger
+    #   - vol > 1.5 * vol_sma (scan-style volume confirmation)
+    #   - RSI > 50 for LONG, RSI < 50 for SHORT (not rsi < 70/ > 30)
+    #   - No ATR compression filter (scan doesn't use it)
+    #   - Session: US 13.5-21.0 UTC OR Asia <= 3.0 (matches scan session_ok)
     # -------------------------------------------------------------------------
     def _generate_signal(self, i: int, row: pd.Series, dt: pd.Timestamp) -> Literal["LONG", "SHORT", "EXIT", "SKIP"]:
         if self._position:
             return "EXIT"
 
-        if not self._is_active_session(dt):
+        # Session filter — MUST match scan session_ok
+        h = dt.hour + dt.minute / 60.0
+        if not (h <= 3.0 or (h >= 13.5 and h <= 21.0)):
             return "SKIP"
 
-        # Trend: EMA alignment
-        ef_val = self._ema_fast.iloc[i]
-        es_val = self._ema_slow.iloc[i]
-        adx_val = self._adx.iloc[i]
-        rsi_val = self._rsi.iloc[i]
-        atr_val = self._atr.iloc[i]
-        vol_ratio = row.get("volume", 1) / self._ema_vol.iloc[i] if self.vol_conf else 1.0
+        # Current and previous bar EMA values for cross detection
+        ef_cur = self._ema_fast.iloc[i]
+        es_cur = self._ema_slow.iloc[i]
+        ef_prv = self._ema_fast_prev.iloc[i]
+        es_prv = self._ema_slow_prev.iloc[i]
 
-        # Trend direction
-        bullish = ef_val > es_val
-        bearish = ef_val < es_val
+        # Golden cross: fast crosses above slow
+        bull_cross = ef_prv <= es_prv and ef_cur > es_cur
+        # Death cross: fast crosses below slow
+        bear_cross = ef_prv >= es_prv and ef_cur < es_cur
+
+        if not bull_cross and not bear_cross:
+            return "SKIP"
 
         # ADX confirmation
-        strong_trend = adx_val >= self.adx_th
-
-        # RSI confirmation
-        rsi_ok = True
-        if self.rsi_conf:
-            rsi_ok = (bullish and rsi_val < 70) or (bearish and rsi_val > 30)
-
-        # Volume confirmation
-        vol_ok = True
-        if self.vol_conf:
-            vol_ok = vol_ratio >= 1.0
-
-        # ATR compression check (MB bars of low ATR)
-        atr_compressed = atr_val <= self._atr_vol.iloc[i]
-
-        if not strong_trend or not rsi_ok or not vol_ok:
+        adx_val = self._adx.iloc[i]
+        if adx_val < self.adx_th:
             return "SKIP"
 
-        # Entry
-        if atr_compressed:
-            if bullish:
-                return "LONG"
-            if bearish:
-                return "SHORT"
+        # Volume confirmation: vol > 1.5 * vol_sma (scan line 184)
+        if self.vol_conf:
+            vol_i = float(row.get("volume", 1))
+            vol_sma_i = self._vol_sma.iloc[i]
+            if vol_sma_i > 0 and vol_i < 1.5 * vol_sma_i:
+                return "SKIP"
 
+        # RSI confirmation (scan lines 187-191)
+        # LONG (bull_cross): RSI > 50 required
+        # SHORT (bear_cross): RSI < 50 required
+        rsi_val = self._rsi.iloc[i]
+        if self.rsi_conf:
+            if bull_cross and (pd.isna(rsi_val) or rsi_val <= 50):
+                return "SKIP"
+            if bear_cross and (pd.isna(rsi_val) or rsi_val >= 50):
+                return "SKIP"
+
+        # Entry
+        if bull_cross:
+            return "LONG"
+        if bear_cross:
+            return "SHORT"
         return "SKIP"
 
     # -------------------------------------------------------------------------
@@ -235,7 +246,7 @@ class EnhancedTrendBacktest:
         self._equity_curve = [self.capital]
 
         bars = len(df)
-        for i in range(30, bars):
+        for i in range(50, bars):  # WARMUP=50 matches scan
             row = df.iloc[i]
             idx = df.index[i]
             dt = pd.Timestamp(idx)
@@ -289,6 +300,8 @@ class EnhancedTrendBacktest:
             return
 
         cur_price = float(row["close"])
+        hi_i = float(row["high"])
+        lo_i = float(row["low"])
         pos.bars_open += 1
 
         exit_reason = ""
@@ -296,21 +309,38 @@ class EnhancedTrendBacktest:
 
         # SL / TP check
         if pos.direction == "LONG":
-            if cur_price <= pos.sl_price:
+            if lo_i <= pos.sl_price:
                 exit_reason = "SL"
                 exit_price = pos.sl_price
-            elif cur_price >= pos.tp_price:
+            elif hi_i >= pos.tp_price:
                 exit_reason = "TP"
                 exit_price = pos.tp_price
         else:
-            if cur_price >= pos.sl_price:
+            if hi_i >= pos.sl_price:
                 exit_reason = "SL"
                 exit_price = pos.sl_price
-            elif cur_price <= pos.tp_price:
+            elif lo_i <= pos.tp_price:
                 exit_reason = "TP"
                 exit_price = pos.tp_price
 
-        # Time exit
+        # EMA cross exit — scan lines 223/245: dead_cross for LONG, gold_cross for SHORT
+        if not exit_reason and i > 50:
+            ef_cur = self._ema_fast.iloc[i]
+            es_cur = self._ema_slow.iloc[i]
+            ef_prv = self._ema_fast_prev.iloc[i]
+            es_prv = self._ema_slow_prev.iloc[i]
+            if pos.direction == "LONG":
+                dead_cross = ef_prv >= es_prv and ef_cur < es_cur
+                if dead_cross:
+                    exit_reason = "CROSS"
+                    exit_price = cur_price
+            else:
+                gold_cross = ef_prv <= es_prv and ef_cur > es_cur
+                if gold_cross:
+                    exit_reason = "CROSS"
+                    exit_price = cur_price
+
+        # Time exit — scan uses max_bars
         if not exit_reason and pos.bars_open >= self.max_bars_held:
             exit_reason = "TIME"
 
