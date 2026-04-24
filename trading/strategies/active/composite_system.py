@@ -35,7 +35,16 @@ from trading.strategies.base import Signal
 
 @dataclass(kw_only=True)
 class SystemConfig:
-    """Top-level configuration for the composite system."""
+    """Top-level configuration for the composite system.
+
+    Params from backtest scan (forex-migration branch, XAUUSD 1h, 2024-2025):
+      - TREND mode:   EMA(12,20) + ADX>=20 + Vol_conf + RSI_conf
+                      SL=2.5 ATR, TP=3.0 ATR, MB=5 bars
+                      50 trades, PF=2.57, WR=62.0%, Score=0.832
+      - RANGE mode:   BB(12,2.0) + RSI(35/70)
+                      SL=2.0 ATR, TP=3.0 ATR
+                      781 trades, PF=1.14, WR=51.5%, Score=0.060
+    """
     # Risk settings
     risk_per_trade_pct: float = 0.01  # 1% of equity per trade
     max_daily_loss_pct: float = 0.03  # 3% daily loss cap
@@ -43,9 +52,9 @@ class SystemConfig:
     # Event calendar path
     economic_calendar_path: str = "config/economic_calendar.yaml"
 
-    # ATR settings for stop/target
-    stop_atr_multiplier: float = 1.5
-    target_atr_multiplier: float = 2.5
+    # ATR settings for stop/target (from scan: SL=2.5, TP=3.0)
+    stop_atr_multiplier: float = 2.5
+    target_atr_multiplier: float = 3.0
 
 
 @dataclass
@@ -108,8 +117,8 @@ class CompositeTradingSystem:
         # ── Layer 1: Regime Detection ────────────────────────────────────────
         regime = detect_regime(
             df["high"], df["low"], df["close"],
-            ema_fast_period=10,
-            ema_slow_period=30,
+            ema_fast_period=12,
+            ema_slow_period=20,
             adx_period=14,
             atr_period=14,
             atr_lookback=100,
